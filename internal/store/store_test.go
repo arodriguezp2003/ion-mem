@@ -17,7 +17,7 @@ func TestOpen_CreatesSchemaVersionRow(t *testing.T) {
 }
 
 // TestOpen_IsIdempotent verifies that opening the same dataDir twice does not
-// produce duplicate schema_version rows.
+// produce duplicate schema_version rows (INSERT OR IGNORE is idempotent).
 func TestOpen_IsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 
@@ -25,6 +25,7 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Open: %v", err)
 	}
+	vFirst := s1.SchemaVersion()
 	if err := s1.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -35,9 +36,18 @@ func TestOpen_IsIdempotent(t *testing.T) {
 	}
 	defer s2.Close()
 
-	v := s2.SchemaVersion()
-	if v != 1 {
-		t.Fatalf("expected exactly SchemaVersion=1 after idempotent open, got %d", v)
+	vSecond := s2.SchemaVersion()
+	if vSecond != vFirst {
+		t.Fatalf("expected same SchemaVersion after idempotent open: first=%d second=%d", vFirst, vSecond)
+	}
+
+	// Verify no duplicate rows: count of rows must equal max version.
+	var rowCount int
+	if err := s2.DB().QueryRow("SELECT COUNT(*) FROM schema_version").Scan(&rowCount); err != nil {
+		t.Fatalf("count schema_version: %v", err)
+	}
+	if rowCount != vSecond {
+		t.Fatalf("expected %d rows in schema_version (one per migration), got %d", vSecond, rowCount)
 	}
 }
 
@@ -113,10 +123,77 @@ func TestMigration0001_CreatesSessionsTable(t *testing.T) {
 	}
 }
 
+// TestMigration0002_AppliesOnTopOf0001 verifies that migration 0002 applies
+// cleanly on top of migration 0001, creating the observations table, FTS5
+// virtual table, and recording version=2 in schema_version.
+func TestMigration0002_AppliesOnTopOf0001(t *testing.T) {
+	s := mustOpen(t)
+
+	// schema_version must have rows for version 1 and 2.
+	v := s.SchemaVersion()
+	if v < 2 {
+		t.Fatalf("expected SchemaVersion >= 2, got %d", v)
+	}
+
+	// Verify both versions are recorded.
+	rows, err := s.DB().Query("SELECT version FROM schema_version ORDER BY version")
+	if err != nil {
+		t.Fatalf("query schema_version: %v", err)
+	}
+	defer rows.Close()
+	var versions []int
+	for rows.Next() {
+		var ver int
+		if err := rows.Scan(&ver); err != nil {
+			t.Fatalf("scan schema_version: %v", err)
+		}
+		versions = append(versions, ver)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("schema_version rows.Err: %v", err)
+	}
+	if !containsInt(versions, 1) || !containsInt(versions, 2) {
+		t.Fatalf("expected versions [1 2] in schema_version, got: %v", versions)
+	}
+
+	// Verify observations table exists.
+	tables := sqliteMasterNames(t, s, "table")
+	if !contains(tables, "observations") {
+		t.Fatalf("expected observations table in sqlite_master, got: %v", tables)
+	}
+
+	// Verify observations_fts virtual table exists.
+	if !contains(tables, "observations_fts") {
+		t.Fatalf("expected observations_fts in sqlite_master tables, got: %v", tables)
+	}
+
+	// Verify all 8 indexes exist.
+	indexes := sqliteMasterNames(t, s, "index")
+	wantIndexes := []string{
+		"idx_obs_session", "idx_obs_type", "idx_obs_project", "idx_obs_scope",
+		"idx_obs_created", "idx_obs_deleted", "idx_obs_topic", "idx_obs_dedupe",
+	}
+	for _, want := range wantIndexes {
+		if !contains(indexes, want) {
+			t.Errorf("expected index %q in sqlite_master, got: %v", want, indexes)
+		}
+	}
+}
+
 // contains reports whether slice contains s.
 func contains(slice []string, s string) bool {
 	for _, v := range slice {
 		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// containsInt reports whether slice contains n.
+func containsInt(slice []int, n int) bool {
+	for _, v := range slice {
+		if v == n {
 			return true
 		}
 	}

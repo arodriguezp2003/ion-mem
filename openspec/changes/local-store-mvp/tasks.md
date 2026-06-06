@@ -76,36 +76,36 @@ PR: `feat(store): slice 1 — schema + sessions` → base: `main`
 
 PR: `feat(store): slice 2 — observations + FTS5 + search` → base: `main` (rebase after PR 1 merges)
 
-- [ ] `[PREP] 2.1` Create `internal/store/schema_0002_observations.go` — DDL constant with `observations` table + 8 indexes + `observations_fts` virtual table + 3 FTS5 sync triggers + `applyMigration0002(db)`. Register in `migrations.go`. (S2-R01..R04, S2-R19)
-- [ ] `[TDD-RED] 2.2` Write failing test `TestMigration0002_AppliesOnTopOf0001` (S2-T01) — queries `sqlite_master` for `observations`, `observations_fts`, verifies `schema_version` has rows 1 and 2. (S2-R19)
-- [ ] `[TDD-GREEN] 2.3` Confirm test passes. Fix DDL registration if needed.
-- [ ] `[PREP] 2.4` Add `normalizedHash(content string) string` and `generateSyncID(prefix string) string` to `internal/store/helpers.go`. (S2-R06, S2-R18)
-- [ ] `[TDD-RED] 2.5` Write failing test `TestAddObservation_NewRow` (S2-T02) — insert + GetObservation round-trip, verify `RevisionCount=1`, `DuplicateCount=0`, `sync_id` prefix. (S2-R05, S2-R09)
-- [ ] `[TDD-GREEN] 2.6` Create `internal/store/observations.go` — `AddObservationParams`, `Observation` struct, `AddObservation` new-row path only. (S2-R05, S2-R09, CC-R09)
-- [ ] `[TDD-RED] 2.7` Write failing test `TestAddObservation_Deduplication` (S2-T03) — same `(hash, project, scope, type, title)` increments `DuplicateCount`, updates `LastSeenAt`. (S2-R07)
-- [ ] `[TDD-GREEN] 2.8` Implement dedup probe in `AddObservation` (query `idx_obs_dedupe`, UPDATE if match, return existing row). (S2-R07)
-- [ ] `[TDD-RED] 2.9` Write failing tests: `TestAddObservation_TopicKeyUpsert_IncrementsRevision` (S2-T04), `TestAddObservation_TopicKeyUpsert_NoExistingRowInsertsNew` (S2-T05). (S2-R08)
-- [ ] `[TDD-GREEN] 2.10` Implement topic-key upsert in `AddObservation` (checked before dedup): query `idx_obs_topic`, UPDATE if match, fall through to new-row otherwise. (S2-R08)
-- [ ] `[TDD-RED] 2.11` Write failing test `TestAddObservation_RejectsUnknownSession` (S2-T06). (S2-R10)
-- [ ] `[TDD-GREEN] 2.12` Confirm FK driver error surfaces as non-nil error. Wrap if needed.
-- [ ] `[TDD-RED] 2.13` Write failing tests: `TestGetObservation_RoundTrip`, `TestGetObservation_NotFound` (S2-T18). (S2-R12)
-- [ ] `[TDD-GREEN] 2.14` Implement `GetObservation(ctx, id int64) (Observation, error)` — excludes soft-deleted, returns `ErrObservationNotFound`. (S2-R12)
-- [ ] `[TDD-RED] 2.15` Write failing test `TestUpdateObservation_PartialUpdate` (S2-T17). (S2-R11)
-- [ ] `[TDD-GREEN] 2.16` Implement `UpdateObservationParams`, `UpdateObservation(ctx, id, params)` — nil fields skipped, `updated_at` always set. (S2-R11)
-- [ ] `[TDD-RED] 2.17` Write failing tests: `TestRecentObservations_ExcludesSoftDeleted` (partial S2-T07), `TestRecentObservations_ProjectAndScopeFilters`. (S2-R14)
-- [ ] `[TDD-GREEN] 2.18` Implement `RecentObservationsParams`, `RecentObservations` — filters `deleted_at IS NULL`, `created_at DESC`, default limit 50. (S2-R14)
-- [ ] `[TDD-RED] 2.19` Write failing tests: `TestDeleteObservation_SoftDelete` (S2-T07), `TestDeleteObservation_HardDelete` (S2-T08), `TestDeleteObservation_NotFound` (S2-T19). (S2-R15)
-- [ ] `[TDD-GREEN] 2.20` Implement `DeleteObservation(ctx, id int64, hard bool) error` — soft: SET `deleted_at`; hard: DELETE row + FTS. (S2-R15)
-- [ ] `[TDD-RED] 2.21` Write failing tests: `TestSearch_BM25Ranking` (S2-T09), `TestSearch_TypeFilter` (S2-T10), `TestSearch_ProjectFilter` (S2-T11), `TestSearch_ScopeFilter` (S2-T12), `TestSearch_EmptyResult` (S2-T15), `TestSearch_ExcludesSoftDeleted` (S2-T16). (S2-R16, S2-R17)
-- [ ] `[TDD-GREEN] 2.22` Implement `SearchParams`, `SearchResult`, `Search(ctx, params)` — FTS5 BM25 JOIN, `sanitizeFTS`, optional filters, `deleted_at IS NULL` guard. (S2-R16, S2-R17)
-- [ ] `[TDD-RED] 2.23` Write failing FTS5 tokenization tests: `TestSearch_FTS5KebabFragment` (S2-T13), `TestSearch_FTS5KebabFull` (S2-T14) in `internal/store/search_test.go`. (S2-R02)
-- [ ] `[TDD-GREEN] 2.24` Confirm tokenizer tests pass (FTS5 `unicode61 remove_diacritics 2` should handle kebab via hyphen splitting). Fix sanitizeFTS quoting strategy if needed.
-- [ ] `[TDD-RED] 2.25` Write failing test `TestDeleteSession_BlockedByObservations` (S2-T20) — insert observation, attempt `DeleteSession` → `ErrSessionHasObservations`. (S1-R16, S2-R20 backfill)
-- [ ] `[TDD-GREEN] 2.26` Confirm FK RESTRICT blocks `DeleteSession` and error is mapped to `ErrSessionHasObservations`. Fix error wrapping in `sessions.go` if needed.
-- [ ] `[TDD-RED] 2.27` Write failing concurrency test `TestAddObservation_ConcurrentSuccess` — two goroutines, same store, both must succeed. (S2-R20)
-- [ ] `[TDD-GREEN] 2.28` Confirm WAL + busy_timeout handles concurrency. Adjust `busy_timeout` value if test is flaky.
-- [ ] `[TDD-REFACTOR] 2.29` Extract `mustObservation(t, s, sessionID string) store.Observation` helper to `store_helpers_test.go`. Reduce duplication across `observations_test.go` and `search_test.go`.
-- [ ] `[VERIFY] 2.30` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥20 new distinct test cases, Slice 1 tests still pass.
+- [x] `[PREP] 2.1` Create `internal/store/schema_0002_observations.go` — DDL constant with `observations` table + 8 indexes + `observations_fts` virtual table + 3 FTS5 sync triggers + `applyMigration0002(db)`. Register in `migrations.go`. (S2-R01..R04, S2-R19)
+- [x] `[TDD-RED] 2.2` Write failing test `TestMigration0002_AppliesOnTopOf0001` (S2-T01) — queries `sqlite_master` for `observations`, `observations_fts`, verifies `schema_version` has rows 1 and 2. (S2-R19)
+- [x] `[TDD-GREEN] 2.3` Confirm test passes. Fix DDL registration if needed.
+- [x] `[PREP] 2.4` Add `normalizedHash(content string) string` and `generateSyncID(prefix string) string` to `internal/store/helpers.go`. (S2-R06, S2-R18)
+- [x] `[TDD-RED] 2.5` Write failing test `TestAddObservation_NewRow` (S2-T02) — insert + GetObservation round-trip, verify `RevisionCount=1`, `DuplicateCount=0`, `sync_id` prefix. (S2-R05, S2-R09)
+- [x] `[TDD-GREEN] 2.6` Create `internal/store/observations.go` — `AddObservationParams`, `Observation` struct, `AddObservation` new-row path only. (S2-R05, S2-R09, CC-R09)
+- [x] `[TDD-RED] 2.7` Write failing test `TestAddObservation_Deduplication` (S2-T03) — same `(hash, project, scope, type, title)` increments `DuplicateCount`, updates `LastSeenAt`. (S2-R07)
+- [x] `[TDD-GREEN] 2.8` Implement dedup probe in `AddObservation` (query `idx_obs_dedupe`, UPDATE if match, return existing row). (S2-R07)
+- [x] `[TDD-RED] 2.9` Write failing tests: `TestAddObservation_TopicKeyUpsert_IncrementsRevision` (S2-T04), `TestAddObservation_TopicKeyUpsert_NoExistingRowInsertsNew` (S2-T05). (S2-R08)
+- [x] `[TDD-GREEN] 2.10` Implement topic-key upsert in `AddObservation` (checked before dedup): query `idx_obs_topic`, UPDATE if match, fall through to new-row otherwise. (S2-R08)
+- [x] `[TDD-RED] 2.11` Write failing test `TestAddObservation_RejectsUnknownSession` (S2-T06). (S2-R10)
+- [x] `[TDD-GREEN] 2.12` Confirm FK driver error surfaces as non-nil error. Wrap if needed.
+- [x] `[TDD-RED] 2.13` Write failing tests: `TestGetObservation_RoundTrip`, `TestGetObservation_NotFound` (S2-T18). (S2-R12)
+- [x] `[TDD-GREEN] 2.14` Implement `GetObservation(ctx, id int64) (Observation, error)` — excludes soft-deleted, returns `ErrObservationNotFound`. (S2-R12)
+- [x] `[TDD-RED] 2.15` Write failing test `TestUpdateObservation_PartialUpdate` (S2-T17). (S2-R11)
+- [x] `[TDD-GREEN] 2.16` Implement `UpdateObservationParams`, `UpdateObservation(ctx, id, params)` — nil fields skipped, `updated_at` always set. (S2-R11)
+- [x] `[TDD-RED] 2.17` Write failing tests: `TestRecentObservations_ExcludesSoftDeleted` (partial S2-T07), `TestRecentObservations_ProjectAndScopeFilters`. (S2-R14)
+- [x] `[TDD-GREEN] 2.18` Implement `RecentObservationsParams`, `RecentObservations` — filters `deleted_at IS NULL`, `created_at DESC`, default limit 50. (S2-R14)
+- [x] `[TDD-RED] 2.19` Write failing tests: `TestDeleteObservation_SoftDelete` (S2-T07), `TestDeleteObservation_HardDelete` (S2-T08), `TestDeleteObservation_NotFound` (S2-T19). (S2-R15)
+- [x] `[TDD-GREEN] 2.20` Implement `DeleteObservation(ctx, id int64, hard bool) error` — soft: SET `deleted_at`; hard: DELETE row + FTS. (S2-R15)
+- [x] `[TDD-RED] 2.21` Write failing tests: `TestSearch_BM25Ranking` (S2-T09), `TestSearch_TypeFilter` (S2-T10), `TestSearch_ProjectFilter` (S2-T11), `TestSearch_ScopeFilter` (S2-T12), `TestSearch_EmptyResult` (S2-T15), `TestSearch_ExcludesSoftDeleted` (S2-T16). (S2-R16, S2-R17)
+- [x] `[TDD-GREEN] 2.22` Implement `SearchParams`, `SearchResult`, `Search(ctx, params)` — FTS5 BM25 JOIN, `sanitizeFTS`, optional filters, `deleted_at IS NULL` guard. (S2-R16, S2-R17)
+- [x] `[TDD-RED] 2.23` Write failing FTS5 tokenization tests: `TestSearch_FTS5KebabFragment` (S2-T13), `TestSearch_FTS5KebabFull` (S2-T14) in `internal/store/search_test.go`. (S2-R02)
+- [x] `[TDD-GREEN] 2.24` Confirm tokenizer tests pass (FTS5 `unicode61 remove_diacritics 2` should handle kebab via hyphen splitting). Fix sanitizeFTS quoting strategy if needed.
+- [x] `[TDD-RED] 2.25` Write failing test `TestDeleteSession_BlockedByObservations` (S2-T20) — insert observation, attempt `DeleteSession` → `ErrSessionHasObservations`. (S1-R16, S2-R20 backfill)
+- [x] `[TDD-GREEN] 2.26` Confirm FK RESTRICT blocks `DeleteSession` and error is mapped to `ErrSessionHasObservations`. Fix error wrapping in `sessions.go` if needed.
+- [x] `[TDD-RED] 2.27` Write failing concurrency test `TestAddObservation_ConcurrentSuccess` — two goroutines, same store, both must succeed. (S2-R20)
+- [x] `[TDD-GREEN] 2.28` Confirm WAL + busy_timeout handles concurrency. Adjust `busy_timeout` value if test is flaky.
+- [x] `[TDD-REFACTOR] 2.29` Extract `mustObservation(t, s, sessionID string) store.Observation` helper to `store_helpers_test.go`. Reduce duplication across `observations_test.go` and `search_test.go`.
+- [x] `[VERIFY] 2.30` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥20 new distinct test cases, Slice 1 tests still pass.
 - [ ] `[COMMIT] 2.31` Work-unit commit: `feat(store): slice 2 — observations + FTS5 + search`
 - [ ] `[PR] 2.32` Rebase on `main` (after PR 1 merges). Open PR #2 targeting `main`. Wait for CI green + merge before starting Slice 3.
 

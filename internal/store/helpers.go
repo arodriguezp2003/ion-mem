@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 )
@@ -41,4 +44,30 @@ func sanitizeFTS(query string) string {
 		quoted = append(quoted, `"`+strings.ReplaceAll(t, `"`, `""`)+`"`)
 	}
 	return strings.Join(quoted, " ")
+}
+
+// normalizeForHash normalizes s for deduplication: lowercase + collapse whitespace.
+func normalizeForHash(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// computeDedupHash returns the SHA-256 hex digest of the normalized content.
+// The dedup KEY is the composite (hash, project, scope, type, title); only
+// the content contributes to the hash itself.
+func computeDedupHash(content string) string {
+	n := normalizeForHash(content)
+	sum := sha256.Sum256([]byte(n))
+	return hex.EncodeToString(sum[:])
+}
+
+// generateSyncID generates a unique sync_id with the given prefix
+// (e.g. "obs-" or "pr-") followed by 16 random hex characters.
+func generateSyncID(prefix string) string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fallback: use time-based value (should never happen in practice).
+		_ = err
+		return prefix + hex.EncodeToString([]byte(time.Now().UTC().Format("20060102150405")))[:16]
+	}
+	return prefix + hex.EncodeToString(b[:])
 }

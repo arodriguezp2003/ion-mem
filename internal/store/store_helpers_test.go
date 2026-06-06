@@ -35,6 +35,24 @@ func mustSession(t *testing.T, s *store.Store, project string) store.Session {
 	return sess
 }
 
+// mustObservation inserts a minimal observation into s for the given sessionID
+// and returns it. Fatal on any error.
+func mustObservation(t *testing.T, s *store.Store, sessionID string) store.Observation {
+	t.Helper()
+	obs, err := s.AddObservation(context.Background(), store.AddObservationParams{
+		SessionID: sessionID,
+		Type:      "decision",
+		Title:     "test-title-" + randomSuffix(),
+		Content:   "test content " + randomSuffix(),
+		Project:   "test-project",
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("mustObservation: %v", err)
+	}
+	return obs
+}
+
 // queryPragmaString executes PRAGMA <name> and returns the string result.
 func queryPragmaString(t *testing.T, s *store.Store, name string) string {
 	t.Helper()
