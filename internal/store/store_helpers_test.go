@@ -53,6 +53,38 @@ func mustObservation(t *testing.T, s *store.Store, sessionID string) store.Obser
 	return obs
 }
 
+// mustObservationForProject inserts a minimal observation for a specific project.
+func mustObservationForProject(t *testing.T, s *store.Store, sessionID, project string) store.Observation {
+	t.Helper()
+	obs, err := s.AddObservation(context.Background(), store.AddObservationParams{
+		SessionID: sessionID,
+		Type:      "decision",
+		Title:     "title-" + randomSuffix(),
+		Content:   "content " + randomSuffix(),
+		Project:   project,
+		Scope:     "project",
+	})
+	if err != nil {
+		t.Fatalf("mustObservationForProject: %v", err)
+	}
+	return obs
+}
+
+// mustPrompt inserts a prompt into s for the given sessionID, content, and
+// project and returns it. Fatal on any error.
+func mustPrompt(t *testing.T, s *store.Store, sessionID, content, project string) store.Prompt {
+	t.Helper()
+	p, err := s.AddPromptIfMissing(context.Background(), store.AddPromptParams{
+		SessionID: sessionID,
+		Content:   content,
+		Project:   project,
+	})
+	if err != nil {
+		t.Fatalf("mustPrompt: %v", err)
+	}
+	return p
+}
+
 // queryPragmaString executes PRAGMA <name> and returns the string result.
 func queryPragmaString(t *testing.T, s *store.Store, name string) string {
 	t.Helper()

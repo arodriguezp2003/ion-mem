@@ -115,32 +115,32 @@ PR: `feat(store): slice 2 — observations + FTS5 + search` → base: `main` (re
 
 PR: `feat(store): slice 3 — prompts + timeline + stats` → base: `main` (rebase after PR 2 merges)
 
-- [ ] `[PREP] 3.1` Create `internal/store/schema_0003_prompts.go` — DDL constant with `user_prompts` table + 3 indexes + `prompts_fts` virtual table + 3 FTS5 sync triggers + `applyMigration0003(db)`. Register in `migrations.go`. (S3-R01..R04, S3-R15)
-- [ ] `[TDD-RED] 3.2` Write failing test `TestMigration0003_AppliesOnTopOf0001And0002` (S3-T01) — queries `sqlite_master`, checks `schema_version` has rows 1, 2, 3. (S3-R15)
-- [ ] `[TDD-GREEN] 3.3` Confirm test passes. Fix registration if needed.
-- [ ] `[TDD-RED] 3.4` Write failing tests: `TestAddPromptIfMissing_InsertsNew` (S3-T02). (S3-R05)
-- [ ] `[TDD-GREEN] 3.5` Create `internal/store/prompts.go` — `AddPromptParams`, `Prompt` struct, `AddPromptIfMissing(ctx, params)` insert path; `sync_id` prefix `"pr-"`; dedup by SHA-256 of `(content + session_id)`. (S3-R05, CC-R09)
-- [ ] `[TDD-RED] 3.6` Write failing tests: `TestAddPromptIfMissing_DedupesSameSessionAndContent` (S3-T03), `TestAddPromptIfMissing_AllowsSameContentDifferentSession` (S3-T04). (S3-R05)
-- [ ] `[TDD-GREEN] 3.7` Implement dedup probe in `AddPromptIfMissing` — SELECT on `(session_id, content hash)` before INSERT. Return existing row if found. (S3-R05)
-- [ ] `[TDD-RED] 3.8` Write failing test `TestAddPromptIfMissing_RejectsUnknownSession` (S3-T05). (S3-R06)
-- [ ] `[TDD-GREEN] 3.9` Confirm FK error surfaces. Wrap if needed.
-- [ ] `[TDD-RED] 3.10` Write failing tests: `TestRecentPrompts_OrderingAndLimit` (S3-T06), `TestRecentPrompts_AllProjectsWhenEmpty` (S3-T07). (S3-R07)
-- [ ] `[TDD-GREEN] 3.11` Implement `RecentPrompts(ctx, project string, limit int) ([]Prompt, error)` — `created_at DESC`, optional project filter, default limit 50. (S3-R07)
-- [ ] `[TDD-RED] 3.12` Write failing tests: `TestSearchPrompts_FTS5Match` (S3-T08), `TestSearchPrompts_EmptyResult` (S3-T09). (S3-R08)
-- [ ] `[TDD-GREEN] 3.13` Implement `SearchPromptsParams`, `SearchPrompts(ctx, params)` — FTS5 BM25 on `prompts_fts`, sanitize query, optional project filter, default limit 20. (S3-R08)
-- [ ] `[TDD-RED] 3.14` Write failing tests: `TestDeletePrompt_Succeeds` (S3-T10), `TestDeletePrompt_NotFound` (S3-T11). (S3-R09)
-- [ ] `[TDD-GREEN] 3.15` Implement `DeletePrompt(ctx, id int64) error` — hard delete only; returns `ErrPromptNotFound` on 0 rows. FTS entry removed via trigger. (S3-R09)
-- [ ] `[TDD-RED] 3.16` Write failing test `TestDeleteSession_BlockedByPrompt` — verify `ErrSessionHasObservations` returned when prompt FK-references the session. (S3-R16)
-- [ ] `[TDD-GREEN] 3.17` Confirm FK RESTRICT on `user_prompts.session_id` blocks `DeleteSession`. Fix error mapping in `sessions.go` if needed. (S3-R16)
-- [ ] `[PREP] 3.18` Create `internal/store/timeline.go` — `TimelineEntry`, `Stats`, `ProjectStats` struct definitions. (S3-R11, S3-R14, CC-R09)
-- [ ] `[TDD-RED] 3.19` Write failing tests: `TestTimeline_MiddleAnchor_BeforeAndAfter` (S3-T12), `TestTimeline_StartAnchor_EmptyBefore` (S3-T13). (S3-R10..R12)
-- [ ] `[TDD-GREEN] 3.20` Implement `Timeline(ctx, observationID int64, before, after int) ([]TimelineEntry, error)` — queries anchor session + created_at, UNION observations + prompts in same session, exclude soft-deleted obs, sort chronologically, slice window. (S3-R10..R12)
-- [ ] `[TDD-RED] 3.21` Write failing tests: `TestTimeline_MixedObservationsAndPrompts` (S3-T14), `TestTimeline_ExcludesSoftDeleted` (S3-T15), `TestTimeline_MissingAnchorReturnsErr` (S3-T16). (S3-R12..R13)
-- [ ] `[TDD-GREEN] 3.22` Extend `Timeline` implementation to handle mixed entries and soft-delete exclusion. Confirm `ErrObservationNotFound` on missing anchor. (S3-R12..R13)
-- [ ] `[TDD-RED] 3.23` Write failing test `TestStats_AccurateCounts` (S3-T17) — seed 2 sessions, 5 non-deleted + 1 soft-deleted obs, 3 prompts; verify all Stats fields. (S3-R14)
-- [ ] `[TDD-GREEN] 3.24` Implement `Stats(ctx) (Stats, error)` — aggregate queries: COUNT non-deleted obs, COUNT prompts, COUNT sessions, GROUP BY project. (S3-R14)
-- [ ] `[TDD-REFACTOR] 3.25` Extract `mustPrompt(t, s, sessionID string) store.Prompt` to `store_helpers_test.go`. Clean up any repeated session/observation seeding in `prompts_test.go` and `timeline_test.go`.
-- [ ] `[VERIFY] 3.26` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥17 new test cases, Slice 1 + 2 still pass.
+- [x] `[PREP] 3.1` Create `internal/store/schema_0003_prompts.go` — DDL constant with `user_prompts` table + 3 indexes + `prompts_fts` virtual table + 3 FTS5 sync triggers + `applyMigration0003(db)`. Register in `migrations.go`. (S3-R01..R04, S3-R15)
+- [x] `[TDD-RED] 3.2` Write failing test `TestMigration0003_AppliesOnTopOf0001And0002` (S3-T01) — queries `sqlite_master`, checks `schema_version` has rows 1, 2, 3. (S3-R15)
+- [x] `[TDD-GREEN] 3.3` Confirm test passes. Fix registration if needed.
+- [x] `[TDD-RED] 3.4` Write failing tests: `TestAddPromptIfMissing_InsertsNew` (S3-T02). (S3-R05)
+- [x] `[TDD-GREEN] 3.5` Create `internal/store/prompts.go` — `AddPromptParams`, `Prompt` struct, `AddPromptIfMissing(ctx, params)` insert path; `sync_id` prefix `"pr-"`; dedup by SHA-256 of `(content + session_id)`. (S3-R05, CC-R09)
+- [x] `[TDD-RED] 3.6` Write failing tests: `TestAddPromptIfMissing_DedupesSameSessionAndContent` (S3-T03), `TestAddPromptIfMissing_AllowsSameContentDifferentSession` (S3-T04). (S3-R05)
+- [x] `[TDD-GREEN] 3.7` Implement dedup probe in `AddPromptIfMissing` — SELECT on `(session_id, content hash)` before INSERT. Return existing row if found. (S3-R05)
+- [x] `[TDD-RED] 3.8` Write failing test `TestAddPromptIfMissing_RejectsUnknownSession` (S3-T05). (S3-R06)
+- [x] `[TDD-GREEN] 3.9` Confirm FK error surfaces. Wrap if needed.
+- [x] `[TDD-RED] 3.10` Write failing tests: `TestRecentPrompts_OrderingAndLimit` (S3-T06), `TestRecentPrompts_AllProjectsWhenEmpty` (S3-T07). (S3-R07)
+- [x] `[TDD-GREEN] 3.11` Implement `RecentPrompts(ctx, project string, limit int) ([]Prompt, error)` — `created_at DESC`, optional project filter, default limit 50. (S3-R07)
+- [x] `[TDD-RED] 3.12` Write failing tests: `TestSearchPrompts_FTS5Match` (S3-T08), `TestSearchPrompts_EmptyResult` (S3-T09). (S3-R08)
+- [x] `[TDD-GREEN] 3.13` Implement `SearchPromptsParams`, `SearchPrompts(ctx, params)` — FTS5 BM25 on `prompts_fts`, sanitize query, optional project filter, default limit 20. (S3-R08)
+- [x] `[TDD-RED] 3.14` Write failing tests: `TestDeletePrompt_Succeeds` (S3-T10), `TestDeletePrompt_NotFound` (S3-T11). (S3-R09)
+- [x] `[TDD-GREEN] 3.15` Implement `DeletePrompt(ctx, id int64) error` — hard delete only; returns `ErrPromptNotFound` on 0 rows. FTS entry removed via trigger. (S3-R09)
+- [x] `[TDD-RED] 3.16` Write failing test `TestDeleteSession_BlockedByPrompt` — verify `ErrSessionHasObservations` returned when prompt FK-references the session. (S3-R16)
+- [x] `[TDD-GREEN] 3.17` Confirm FK RESTRICT on `user_prompts.session_id` blocks `DeleteSession`. Fix error mapping in `sessions.go` if needed. (S3-R16)
+- [x] `[PREP] 3.18` Create `internal/store/timeline.go` — `TimelineEntry`, `Stats`, `ProjectStats` struct definitions. (S3-R11, S3-R14, CC-R09)
+- [x] `[TDD-RED] 3.19` Write failing tests: `TestTimeline_MiddleAnchor_BeforeAndAfter` (S3-T12), `TestTimeline_StartAnchor_EmptyBefore` (S3-T13). (S3-R10..R12)
+- [x] `[TDD-GREEN] 3.20` Implement `Timeline(ctx, observationID int64, before, after int) ([]TimelineEntry, error)` — queries anchor session + created_at, UNION observations + prompts in same session, exclude soft-deleted obs, sort chronologically, slice window. (S3-R10..R12)
+- [x] `[TDD-RED] 3.21` Write failing tests: `TestTimeline_MixedObservationsAndPrompts` (S3-T14), `TestTimeline_ExcludesSoftDeleted` (S3-T15), `TestTimeline_MissingAnchorReturnsErr` (S3-T16). (S3-R12..R13)
+- [x] `[TDD-GREEN] 3.22` Extend `Timeline` implementation to handle mixed entries and soft-delete exclusion. Confirm `ErrObservationNotFound` on missing anchor. (S3-R12..R13)
+- [x] `[TDD-RED] 3.23` Write failing test `TestStats_AccurateCounts` (S3-T17) — seed 2 sessions, 5 non-deleted + 1 soft-deleted obs, 3 prompts; verify all Stats fields. (S3-R14)
+- [x] `[TDD-GREEN] 3.24` Implement `Stats(ctx) (Stats, error)` — aggregate queries: COUNT non-deleted obs, COUNT prompts, COUNT sessions, GROUP BY project. (S3-R14)
+- [x] `[TDD-REFACTOR] 3.25` Extract `mustPrompt(t, s, sessionID string) store.Prompt` to `store_helpers_test.go`. Clean up any repeated session/observation seeding in `prompts_test.go` and `timeline_test.go`.
+- [x] `[VERIFY] 3.26` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥17 new test cases, Slice 1 + 2 still pass.
 - [ ] `[COMMIT] 3.27` Work-unit commit: `feat(store): slice 3 — prompts + timeline + stats`
 - [ ] `[PR] 3.28` Rebase on `main` (after PR 2 merges). Open PR #3 targeting `main`. Wait for CI green + merge.
 
@@ -148,10 +148,10 @@ PR: `feat(store): slice 3 — prompts + timeline + stats` → base: `main` (reba
 
 ## Part 6: Cross-cutting Verification (post-Slice 3)
 
-- [ ] CC.1 Confirm all 56 requirements (S1-R01..R20, S2-R01..R20, S3-R01..R16, CC-R01..R11 minus 3 out-of-scope) have a corresponding test or implementation evidence link
-- [ ] CC.2 Confirm all 53 scenarios (S1-T01..T16, S2-T01..T20, S3-T01..T17) have a named test function
-- [ ] CC.3 Run `go test -cover ./internal/store/...` — inspect coverage report (informational, not a gate for MVP)
-- [ ] CC.4 Final clean pass: `go vet ./...`, `gofmt -l .`, `go build ./...`, `go test ./internal/store/...` all exit 0
+- [x] CC.1 Confirm all 56 requirements (S1-R01..R20, S2-R01..R20, S3-R01..R16, CC-R01..R11 minus 3 out-of-scope) have a corresponding test or implementation evidence link
+- [x] CC.2 Confirm all 53 scenarios (S1-T01..T16, S2-T01..T20, S3-T01..T17) have a named test function
+- [x] CC.3 Run `go test -cover ./internal/store/...` — inspect coverage report (informational, not a gate for MVP)
+- [x] CC.4 Final clean pass: `go vet ./...`, `gofmt -l .`, `go build ./...`, `go test ./internal/store/...` all exit 0
 
 ---
 

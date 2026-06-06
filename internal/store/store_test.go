@@ -180,6 +180,62 @@ func TestMigration0002_AppliesOnTopOf0001(t *testing.T) {
 	}
 }
 
+// TestMigration0003_AppliesOnTopOf0001And0002 verifies that migration 0003 applies
+// cleanly on top of migrations 0001 and 0002, creating the user_prompts table,
+// prompts_fts virtual table, and recording version=3 in schema_version.
+func TestMigration0003_AppliesOnTopOf0001And0002(t *testing.T) {
+	s := mustOpen(t)
+
+	// schema_version must have rows for versions 1, 2, and 3.
+	v := s.SchemaVersion()
+	if v < 3 {
+		t.Fatalf("expected SchemaVersion >= 3, got %d", v)
+	}
+
+	// Verify all three versions are recorded.
+	rows, err := s.DB().Query("SELECT version FROM schema_version ORDER BY version")
+	if err != nil {
+		t.Fatalf("query schema_version: %v", err)
+	}
+	defer rows.Close()
+	var versions []int
+	for rows.Next() {
+		var ver int
+		if err := rows.Scan(&ver); err != nil {
+			t.Fatalf("scan schema_version: %v", err)
+		}
+		versions = append(versions, ver)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("schema_version rows.Err: %v", err)
+	}
+	for _, want := range []int{1, 2, 3} {
+		if !containsInt(versions, want) {
+			t.Fatalf("expected version %d in schema_version, got: %v", want, versions)
+		}
+	}
+
+	// Verify user_prompts table exists.
+	tables := sqliteMasterNames(t, s, "table")
+	if !contains(tables, "user_prompts") {
+		t.Fatalf("expected user_prompts table in sqlite_master, got: %v", tables)
+	}
+
+	// Verify prompts_fts virtual table exists.
+	if !contains(tables, "prompts_fts") {
+		t.Fatalf("expected prompts_fts in sqlite_master tables, got: %v", tables)
+	}
+
+	// Verify all 3 indexes exist.
+	indexes := sqliteMasterNames(t, s, "index")
+	wantIndexes := []string{"idx_prompts_session", "idx_prompts_project", "idx_prompts_created"}
+	for _, want := range wantIndexes {
+		if !contains(indexes, want) {
+			t.Errorf("expected index %q in sqlite_master, got: %v", want, indexes)
+		}
+	}
+}
+
 // contains reports whether slice contains s.
 func contains(slice []string, s string) bool {
 	for _, v := range slice {
