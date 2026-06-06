@@ -205,10 +205,9 @@
 
 **Scenario LIC-02: missing LICENSE is detectable**
 
-- GIVEN CI includes an "expected files" check step
+- GIVEN CI includes an "expected files" check step (or review policy)
 - WHEN `LICENSE` is absent from the repo
-- THEN the CI check step fails
-- NOTE: if no explicit file-presence CI check is added, this scenario is enforced by code review policy; the spec records both options and leaves the implementation decision to `sdd-tasks`
+- THEN the CI check step fails (if file-presence check exists) or review blocks merge
 
 #### README scenarios
 
@@ -216,7 +215,7 @@
 
 - GIVEN `README.md` exists at the repo root
 - WHEN the file is parsed
-- THEN it contains sections covering: what ion-mem is, the fork relationship to upstream engram, current status, and build/test commands
+- THEN it contains sections covering: what ion-mem is, fork relationship, current status, and build/test commands
 
 **Scenario README-02: build commands are accurate**
 
@@ -237,7 +236,7 @@
 - [ ] Go version in `go.mod` is `1.25`
 - [ ] `go.mod` has an empty `require` block
 
-**Required files — exact list:**
+**Required files — exact list (17 total):**
 
 | File | Description |
 |------|-------------|
@@ -258,7 +257,7 @@
 | `internal/project/doc.go` | Project management layer intent |
 | `internal/cloud/dashboard/doc.go` | Dashboard sub-package placeholder |
 
-Total: 7 root/tooling files + 9 `doc.go` files (8 top-level internal packages + 1 nested under `cloud/dashboard`) + 1 `main.go` = **17 files**.
+Total: 6 root/tooling files + 1 CI workflow + 1 `main.go` + 9 `doc.go` files = **17 files**.
 
 ---
 
