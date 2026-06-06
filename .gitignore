@@ -1,0 +1,32 @@
+# Build output (binary only at repo root, not cmd/ion-mem/ source directory)
+/bin/
+dist/
+/ion-mem
+*.exe
+
+# SQLite database files (WAL mode produces -wal and -shm sidecars)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Engram data directory (local persistence)
+.engram/
+
+# gentle-ai local metadata (skill registry cache)
+.atl/
+
+# Local environment files
+.env
+.env.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
