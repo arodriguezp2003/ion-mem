@@ -120,6 +120,10 @@ func (s *Server) ServerTools() []mcpserver.ServerTool {
 		buildSessionSummaryTool(s),
 		buildSavePromptTool(s),
 		buildSuggestTopicKeyTool(s),
+		buildUpdateTool(s),
+		buildDeleteTool(s),
+		buildTimelineTool(s),
+		buildStatsTool(s),
 	}
 
 	for _, st := range candidates {
