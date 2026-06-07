@@ -45,6 +45,7 @@ Call `ion_save` IMMEDIATELY after ANY of these:
 - Decision made (architecture, convention, workflow, tool choice)
 - Bug fixed (include root cause)
 - Convention or workflow documented/updated
+- Notion/Jira/GitHub artifact created or updated with significant content
 - Non-obvious discovery, gotcha, or edge case found
 - Pattern established (naming, structure, approach)
 - User preference or constraint learned

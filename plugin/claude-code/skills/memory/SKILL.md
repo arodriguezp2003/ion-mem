@@ -10,22 +10,33 @@ This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on d
 
 ## AVAILABLE TOOLS
 
-Core tools are loaded automatically at session start by the UserPromptSubmit hook.
-They are available immediately — no manual ToolSearch needed.
+All 14 `ion_*` tools are loaded automatically at session start by the
+UserPromptSubmit hook. They are available immediately — no manual ToolSearch
+needed.
 
-- `ion_save`, `ion_search`, `ion_context`, `ion_session_summary`
-- `ion_get_observation`, `ion_suggest_topic_key`, `ion_update`
-- `ion_session_start`, `ion_session_end`, `ion_save_prompt`
+**Save & update**:
+- `ion_save`, `ion_update`, `ion_delete`, `ion_suggest_topic_key`
+
+**Search & retrieve**:
+- `ion_search`, `ion_context`, `ion_get_observation`, `ion_timeline`
+
+**Session lifecycle**:
+- `ion_session_start`, `ion_session_end`, `ion_session_summary`, `ion_save_prompt`
+
+**Utilities**:
+- `ion_current_project`, `ion_stats`
 
 **Fallback**: If tools are unexpectedly unavailable, run `ion-mem setup claude-code`
 again and restart Claude Code.
 <!-- NOTE: `ion-mem setup claude-code` does not exist yet — it is a placeholder
-     for a future change that will implement the setup subcommand. -->
+     for a future change that will implement the setup subcommand. Until then,
+     install manually by symlinking plugin/claude-code into ~/.claude/plugins/. -->
 
-Admin tools (deferred — use ToolSearch only if needed):
-- `ion_stats`, `ion_delete`, `ion_timeline`
-<!-- NOTE: ion_capture_passive is not yet implemented in ion-mem; it is deferred
-     to a future change. Do not use it. -->
+<!-- NOTE: ion_capture_passive (engram parity) is not yet implemented in ion-mem;
+     it is deferred to a future change. Do not call it — the SubagentStop hook
+     is also disabled until that tool ships. -->
+<!-- NOTE: ion_judge / ion_compare (engram's conflict surfacing) are deferred
+     to a future mcp-conflict-surfacing change. Do not call them. -->
 
 ## PROACTIVE SAVE TRIGGERS (mandatory — do NOT wait for user to ask)
 

@@ -46,14 +46,16 @@ Call `ion_save` IMMEDIATELY after ANY of these:
 - Decision made (architecture, convention, workflow, tool choice)
 - Bug fixed (include root cause)
 - Convention or workflow documented/updated
+- Notion/Jira/GitHub artifact created or updated with significant content
 - Non-obvious discovery, gotcha, or edge case found
 - Pattern established (naming, structure, approach)
 - User preference or constraint learned
 - Feature implemented with non-obvious approach
 - User confirms your recommendation ("go with that", "sounds good", or the equivalent in the user's language)
 - User rejects an approach or expresses a preference
+- Discussion concludes with a clear direction chosen — even if the agent proposed it
 
-**Self-check after EVERY task**: "Did I or the user just make a decision, confirm a recommendation, fix a bug, learn something, or establish a convention? If yes → ion_save NOW."
+**Self-check after EVERY task**: "Did I or the user just make a decision, confirm a recommendation, express a preference, fix a bug, learn something, or establish a convention? If yes → ion_save NOW."
 
 ### SEARCH MEMORY when:
 - User asks to recall anything ("remember", "what did we do", or the equivalent in the user's language)
