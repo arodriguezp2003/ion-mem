@@ -113,5 +113,23 @@ if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
   echo
 fi
 
+# Coexistence warning: engram and ion-mem can both be installed (no hard
+# conflicts — different MCP ids, tool prefixes, data dirs, etc.) but if BOTH
+# plugins are ACTIVE in Claude Code their SessionStart hooks each inject their
+# own Memory Protocol on every session, leading to: (a) duplicated ~150 lines
+# of additionalContext per session, (b) the agent loading 27 tools instead of
+# 14, (c) potential double-saves to both stores. Warn explicitly. We do NOT
+# touch the engram plugin — disabling is the user's choice.
+ENGRAM_PLUGIN_DIR="$(dirname "$PLUGIN_DEST")/engram"
+if [ -L "$ENGRAM_PLUGIN_DIR" ] || [ -d "$ENGRAM_PLUGIN_DIR" ]; then
+  echo "⚠ engram plugin detected at $ENGRAM_PLUGIN_DIR"
+  echo "  Both plugins ACTIVE → duplicated Memory Protocol injection,"
+  echo "  duplicated ToolSearch (27 tools), and potential double-saves."
+  echo "  To deactivate engram (reversible — does NOT delete data):"
+  echo "    mv \"$ENGRAM_PLUGIN_DIR\" \"${ENGRAM_PLUGIN_DIR}.disabled\""
+  echo "  Then restart Claude Code."
+  echo
+fi
+
 echo "Next: restart Claude Code to load the ion-mem plugin."
 echo "Uninstall: ./install.sh --uninstall"
