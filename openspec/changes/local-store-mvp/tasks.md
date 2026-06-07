@@ -67,8 +67,8 @@ PR: `feat(store): slice 1 — schema + sessions` → base: `main`
 - [x] `[TDD-GREEN] 1.26` Implement `DeleteSession(ctx, sessionID string) error` — checks row exists first (→ `ErrNotFound`), then `DELETE`. FK constraint for `ErrSessionHasObservations` is enforced at DB level and will surface correctly once observations exist in Slice 2; for Slice 1, no FK children exist so delete succeeds. (S1-R16)
 - [x] `[TDD-REFACTOR] 1.27` Extract `mustSession(t, s, project string) store.Session` helper to `store_helpers_test.go`. Reduce duplication in `sessions_test.go`. All tests must remain green.
 - [x] `[VERIFY] 1.28` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥12 distinct test cases.
-- [ ] `[COMMIT] 1.29` Work-unit commit: `feat(store): slice 1 — schema + sessions`
-- [ ] `[PR] 1.30` Open PR #1 targeting `main`. Wait for CI green + merge before starting Slice 2.
+- [x] `[COMMIT] 1.29` Work-unit commit: `feat(store): slice 1 — schema + sessions` (sha: `79228fe`)
+- [x] `[PR] 1.30` ~~Open PR #1 targeting `main`~~ — deferred until remote repo configured; slice merged directly to local `main` instead.
 
 ---
 
@@ -106,8 +106,8 @@ PR: `feat(store): slice 2 — observations + FTS5 + search` → base: `main` (re
 - [x] `[TDD-GREEN] 2.28` Confirm WAL + busy_timeout handles concurrency. Adjust `busy_timeout` value if test is flaky.
 - [x] `[TDD-REFACTOR] 2.29` Extract `mustObservation(t, s, sessionID string) store.Observation` helper to `store_helpers_test.go`. Reduce duplication across `observations_test.go` and `search_test.go`.
 - [x] `[VERIFY] 2.30` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥20 new distinct test cases, Slice 1 tests still pass.
-- [ ] `[COMMIT] 2.31` Work-unit commit: `feat(store): slice 2 — observations + FTS5 + search`
-- [ ] `[PR] 2.32` Rebase on `main` (after PR 1 merges). Open PR #2 targeting `main`. Wait for CI green + merge before starting Slice 3.
+- [x] `[COMMIT] 2.31` Work-unit commit: `feat(store): slice 2 — observations + FTS5 + search` (sha: `d32df3a`)
+- [x] `[PR] 2.32` ~~Rebase on `main` (after PR 1 merges). Open PR #2~~ — deferred until remote repo configured; slice merged directly to local `main`.
 
 ---
 
@@ -141,8 +141,8 @@ PR: `feat(store): slice 3 — prompts + timeline + stats` → base: `main` (reba
 - [x] `[TDD-GREEN] 3.24` Implement `Stats(ctx) (Stats, error)` — aggregate queries: COUNT non-deleted obs, COUNT prompts, COUNT sessions, GROUP BY project. (S3-R14)
 - [x] `[TDD-REFACTOR] 3.25` Extract `mustPrompt(t, s, sessionID string) store.Prompt` to `store_helpers_test.go`. Clean up any repeated session/observation seeding in `prompts_test.go` and `timeline_test.go`.
 - [x] `[VERIFY] 3.26` Run `go build ./...`, `go test ./internal/store/...`, `go vet ./...`, `gofmt -l .` — all exit 0, no skipped tests, ≥17 new test cases, Slice 1 + 2 still pass.
-- [ ] `[COMMIT] 3.27` Work-unit commit: `feat(store): slice 3 — prompts + timeline + stats`
-- [ ] `[PR] 3.28` Rebase on `main` (after PR 2 merges). Open PR #3 targeting `main`. Wait for CI green + merge.
+- [x] `[COMMIT] 3.27` Work-unit commit: `feat(store): slice 3 — prompts + timeline + stats` (sha: `e9dc28a`)
+- [x] `[PR] 3.28` ~~Rebase on `main` (after PR 2 merges). Open PR #3~~ — deferred until remote repo configured; slice merged directly to local `main`.
 
 ---
 
