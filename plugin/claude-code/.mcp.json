@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ion-mem": {
+      "command": "ion-mem",
+      "args": ["mcp", "--profile=agent"]
+    }
+  }
+}
