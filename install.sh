@@ -140,6 +140,14 @@ uninstall() {
   echo "[ion-mem install] Removing binary at $bin_dir/ion-mem"
   rm -f "$bin_dir/ion-mem"
 
+  # Remove the system-PATH symlinks created during install.
+  for sys_dir in /opt/homebrew/bin /usr/local/bin; do
+    if [ -L "$sys_dir/ion-mem" ]; then
+      echo "[ion-mem install] Removing system-PATH symlink at $sys_dir/ion-mem"
+      rm -f "$sys_dir/ion-mem"
+    fi
+  done
+
   if [ -L "$LEGACY_PLUGIN_SYMLINK" ] || [ -e "$LEGACY_PLUGIN_SYMLINK" ]; then
     echo "[ion-mem install] Removing legacy plugin symlink at $LEGACY_PLUGIN_SYMLINK"
     rm -rf "$LEGACY_PLUGIN_SYMLINK"
@@ -226,33 +234,40 @@ else
   claude plugin install ion-mem 2>&1 | sed 's/^/  /'
 fi
 
-# ─── Patch cached .mcp.json with the absolute binary path ───────────────────
-# Claude Code spawns the MCP server with whatever PATH it was launched under.
-# A GUI launch from Spotlight/Finder/Dock does NOT load ~/.zshrc, so a bare
-# `command: "ion-mem"` fails to resolve. The bash hooks have their own PATH
-# guard (added at script top), but the MCP server is launched directly by
-# Claude Code from .mcp.json — so we have to rewrite it to the absolute path
-# at install time.
-CACHED_MCP_JSON="$(find "$HOME/.claude/plugins/cache/ion-mem/ion-mem" -name '.mcp.json' -print -quit 2>/dev/null || true)"
-if [ -n "$CACHED_MCP_JSON" ] && [ -f "$CACHED_MCP_JSON" ]; then
-  if command -v jq >/dev/null 2>&1; then
-    tmp_mcp="$(mktemp)"
-    if jq --arg cmd "$BIN_DIR/ion-mem" '.mcpServers."ion-mem".command = $cmd' "$CACHED_MCP_JSON" > "$tmp_mcp"; then
-      mv "$tmp_mcp" "$CACHED_MCP_JSON"
-      echo "[ion-mem install] Patched cached .mcp.json command → $BIN_DIR/ion-mem"
+# ─── Make ion-mem findable on GUI-launched Claude Code's PATH ──────────────
+# Claude Code launched from Spotlight/Finder/Dock inherits a minimal system
+# PATH that does NOT include $HOME/go/bin. The plugin's .mcp.json says
+# `command: "ion-mem"` (bare, not absolute) so Claude Code's spawn fails with
+# `Executable not found in $PATH`. Earlier versions of this script attempted
+# to jq-patch the cached .mcp.json with an absolute path, but Claude Code
+# resolves the spawn config from the source location (the marketplace path),
+# not the cache copy — so patching the cache was a no-op.
+#
+# Real fix: symlink the binary into a system-PATH location that GUI apps
+# inherit. On Apple Silicon Homebrew that's /opt/homebrew/bin; on older
+# Homebrew it's /usr/local/bin. Both are user-writable for Homebrew users.
+SYSTEM_BIN_DIRS=("/opt/homebrew/bin" "/usr/local/bin")
+SYMLINK_CREATED=""
+for sys_dir in "${SYSTEM_BIN_DIRS[@]}"; do
+  if [ -d "$sys_dir" ] && [ -w "$sys_dir" ]; then
+    target="$sys_dir/ion-mem"
+    if [ -L "$target" ] && [ "$(readlink "$target")" = "$BIN_DIR/ion-mem" ]; then
+      echo "[ion-mem install] System-PATH symlink already in place: $target"
     else
-      rm -f "$tmp_mcp"
-      echo "[ion-mem install] ⚠ jq failed to patch $CACHED_MCP_JSON; MCP may not start under GUI-launched Claude Code"
+      ln -sfn "$BIN_DIR/ion-mem" "$target" \
+        && echo "[ion-mem install] Created symlink: $target → $BIN_DIR/ion-mem"
     fi
-  else
-    echo "[ion-mem install] ⚠ 'jq' not on PATH; cannot patch cached .mcp.json"
-    echo "  GUI-launched Claude Code may not find 'ion-mem' on its inherited PATH."
-    echo "  Either install jq (brew install jq) and re-run, or edit:"
-    echo "    $CACHED_MCP_JSON"
-    echo "  and set mcpServers.ion-mem.command to: $BIN_DIR/ion-mem"
+    SYMLINK_CREATED="$target"
+    break
   fi
-else
-  echo "[ion-mem install] ⚠ Could not locate cached .mcp.json under ~/.claude/plugins/cache/ion-mem"
+done
+
+if [ -z "$SYMLINK_CREATED" ]; then
+  echo "[ion-mem install] ⚠ Neither /opt/homebrew/bin nor /usr/local/bin is writable."
+  echo "  GUI-launched Claude Code will not find 'ion-mem' on its inherited PATH."
+  echo "  Fixes:"
+  echo "    1. sudo ln -sfn $BIN_DIR/ion-mem /usr/local/bin/ion-mem"
+  echo "    2. Or launch Claude Code from a terminal that has $BIN_DIR on PATH."
 fi
 
 # ─── 5. Verification banner ─────────────────────────────────────────────────
