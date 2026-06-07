@@ -30,3 +30,7 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Go coverage outputs
+*.out
+coverage.txt
