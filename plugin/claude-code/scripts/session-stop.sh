@@ -1,4 +1,7 @@
 #!/bin/bash
+# ion-mem PATH guard: GUI-launched Claude Code does not load ~/.zshrc.
+# Cover the common per-user Go install dir + system Homebrew locations.
+export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 # ion-mem — Stop hook for Claude Code (async)
 #
 # Marks the session as ended via the ion-mem CLI.

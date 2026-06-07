@@ -226,6 +226,35 @@ else
   claude plugin install ion-mem 2>&1 | sed 's/^/  /'
 fi
 
+# ─── Patch cached .mcp.json with the absolute binary path ───────────────────
+# Claude Code spawns the MCP server with whatever PATH it was launched under.
+# A GUI launch from Spotlight/Finder/Dock does NOT load ~/.zshrc, so a bare
+# `command: "ion-mem"` fails to resolve. The bash hooks have their own PATH
+# guard (added at script top), but the MCP server is launched directly by
+# Claude Code from .mcp.json — so we have to rewrite it to the absolute path
+# at install time.
+CACHED_MCP_JSON="$(find "$HOME/.claude/plugins/cache/ion-mem/ion-mem" -name '.mcp.json' -print -quit 2>/dev/null || true)"
+if [ -n "$CACHED_MCP_JSON" ] && [ -f "$CACHED_MCP_JSON" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    tmp_mcp="$(mktemp)"
+    if jq --arg cmd "$BIN_DIR/ion-mem" '.mcpServers."ion-mem".command = $cmd' "$CACHED_MCP_JSON" > "$tmp_mcp"; then
+      mv "$tmp_mcp" "$CACHED_MCP_JSON"
+      echo "[ion-mem install] Patched cached .mcp.json command → $BIN_DIR/ion-mem"
+    else
+      rm -f "$tmp_mcp"
+      echo "[ion-mem install] ⚠ jq failed to patch $CACHED_MCP_JSON; MCP may not start under GUI-launched Claude Code"
+    fi
+  else
+    echo "[ion-mem install] ⚠ 'jq' not on PATH; cannot patch cached .mcp.json"
+    echo "  GUI-launched Claude Code may not find 'ion-mem' on its inherited PATH."
+    echo "  Either install jq (brew install jq) and re-run, or edit:"
+    echo "    $CACHED_MCP_JSON"
+    echo "  and set mcpServers.ion-mem.command to: $BIN_DIR/ion-mem"
+  fi
+else
+  echo "[ion-mem install] ⚠ Could not locate cached .mcp.json under ~/.claude/plugins/cache/ion-mem"
+fi
+
 # ─── 5. Verification banner ─────────────────────────────────────────────────
 
 if [ -x "$BIN_DIR/ion-mem" ]; then
