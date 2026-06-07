@@ -1,6 +1,6 @@
 {
   "name": "ion-mem",
-  "description": "Persistent memory for AI coding agents. Internal Ionix fork of engram.",
+  "description": "Persistent memory for AI coding agents — session tracking, compaction recovery, and Memory Protocol over MCP.",
   "version": "0.1.0",
   "author": { "name": "Ionix" },
   "license": "MIT"

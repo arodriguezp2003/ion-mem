@@ -1,10 +1,11 @@
 # ion-mem
 
-Persistent memory for AI coding agents, internal Ionix fork of engram.
+Persistent memory for AI coding agents — team-grade, agent-agnostic, local-first.
 
 ## Status
 
-scaffold / work in progress
+Local layer shipped (store + MCP + project detection + Claude Code plugin).
+Cloud layer (multi-user, projects, RBAC, invites, audit) is the next big slice.
 
 ## What is ion-mem?
 
@@ -12,14 +13,9 @@ scaffold / work in progress
 It stores observations, sessions, prompts, and relations in a local SQLite
 database with FTS5 full-text indexing, and exposes them through an MCP
 (Model Context Protocol) server so agents can persist and recall context
-across sessions.
+across sessions and post-compaction.
 
-## Fork Relationship
-
-`ion-mem` is an internal Ionix fork of
-[engram](https://github.com/Gentleman-Programming/engram).
-It extends engram with Ionix-specific features while tracking upstream
-improvements. Module path: `github.com/ionix/ion-mem`.
+Module path: `github.com/ionix/ion-mem`.
 
 ## Build & Test
 

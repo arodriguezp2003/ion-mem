@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ion-mem",
+  "description": "Persistent memory for AI coding agents — team-grade, agent-agnostic, local-first.",
+  "owner": {
+    "name": "Ionix"
+  },
+  "plugins": [
+    {
+      "name": "ion-mem",
+      "description": "Persistent memory with session tracking, compaction recovery, and Memory Protocol. 14 ion_* tools wired to a local SQLite store; agent-agnostic via MCP.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Ionix"
+      },
+      "source": "./plugin/claude-code",
+      "category": "productivity"
+    }
+  ]
+}
