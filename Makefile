@@ -20,6 +20,16 @@ lint:
 fmt:
 	@out="$$(gofmt -l .)" && test -z "$$out" || (echo "$$out" && exit 1)
 
+## install: build + symlink the Claude Code plugin (delegates to ./install.sh)
+.PHONY: install
+install:
+	./install.sh
+
+## uninstall: remove the binary and Claude Code plugin symlink
+.PHONY: uninstall
+uninstall:
+	./install.sh --uninstall
+
 ## help: list available make targets with descriptions
 .PHONY: help
 help:
