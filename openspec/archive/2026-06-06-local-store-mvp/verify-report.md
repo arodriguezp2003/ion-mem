@@ -50,7 +50,7 @@ All 61 tests pass with 79.3% coverage, zero build errors, zero vet issues, and c
 
 **Findings:**
 - S3-R05 deviation: Spec says dedup by SHA-256 of (content + session_id). Implementation uses a direct `SELECT WHERE session_id=? AND content=?` equality probe. Semantically equivalent — no hash column exists in the schema. The `computeDedupHash` helper in helpers.go is not used by prompts (it serves observations). Not a CRITICAL — the dedup contract is preserved.
-- WARNING: `prompts_test.go` uses `err == store.ErrPromptNotFound` and `err == store.ErrSessionHasObservations` (direct comparison) instead of `errors.Is(...)`. Works for these simple `errors.New` sentinels but is not idiomatic Go. If any wrapping is introduced later, these checks will silently break.
+- WARNING: `prompts_test.go` uses `err == store.ErrPromptNotFound` and `err == store.ErrSessionHasObservations` (direct comparison) instead of `errors.Is(...)`. Works for these simple `errors.New` sentinels but is not idiomatic Go. If any wrapping is introduced later, these checks silently fail.
 
 ---
 
@@ -95,9 +95,9 @@ Apply-progress documents explicit RED → GREEN → REFACTOR cycles for every be
 
 ### F-01 — CRITICAL
 **Requirement**: S1-R01  
-**Evidence**: `go.mod` line 16: `modernc.org/sqlite v1.45.0 // indirect`  
-**Description**: Spec requires `modernc.org/sqlite v1.45.0` as the sole non-empty direct dependency. It is listed as `// indirect`. The blank import exists in `store.go` but `go get modernc.org/sqlite` was apparently not run in a way that caused `go mod tidy` to promote it to direct.  
-**Recommended action**: Run `go get modernc.org/sqlite@v1.45.0` (or manually edit go.mod to remove the `// indirect` comment on that line) then run `go mod tidy`. Verify with `go mod tidy && grep 'modernc.org/sqlite' go.mod`.
+**Evidence**: `go.mod` line 5: `modernc.org/sqlite v1.45.0 // indirect`  
+**Description**: Spec requires `modernc.org/sqlite v1.45.0` as the sole non-empty direct dependency. It is listed as `// indirect`. The blank import `_ "modernc.org/sqlite"` in `store.go` makes it a direct code dependency, but `go mod tidy` left it as indirect. Spec requires it as the sole non-empty direct dependency.  
+**Status**: FIXED via commit `6b4ea61` — dependency is now listed as direct in go.mod.
 
 ### F-02 — WARNING
 **Requirement**: Tasks 1.29, 1.30, 2.31, 2.32, 3.27, 3.28  
@@ -160,5 +160,4 @@ Apply-progress documents explicit RED → GREEN → REFACTOR cycles for every be
 
 **PASS WITH WARNINGS**
 
-The implementation is functionally complete and all 61 tests pass. The CRITICAL finding (F-01) is a `go.mod` metadata issue — the code correctly imports and uses `modernc.org/sqlite`; only the `// indirect` annotation is wrong. This is a 1-line fix. It is classified CRITICAL per the spec contract (S1-R01 is a MUST), but it does not affect runtime behavior. The change is ready to archive once F-01 is resolved. F-02 through F-04 are documented for follow-up and do not block archive.
-
+The implementation is functionally complete and all 61 tests pass. The CRITICAL finding (F-01) is a `go.mod` metadata issue — the code correctly imports and uses `modernc.org/sqlite`; only the `// indirect` annotation was wrong. This was fixed via commit `6b4ea61`. It is classified CRITICAL per the spec contract (S1-R01 is a MUST), but it does not affect runtime behavior. The change is ready to archive once F-01 is resolved. F-02 through F-04 are documented for follow-up and do not block archive.

@@ -182,12 +182,12 @@ Then   errors.Is(err, store.ErrNotFound) is true
 
 ### 2.3 Acceptance criteria (Slice 1)
 
-- [ ] `go test ./internal/store/...` exits 0 with no skipped tests and no `t.Skip` calls
-- [ ] Slice 1 covers at least 12 distinct test cases (table-driven tests count per row)
-- [ ] `go vet ./...` exits 0
-- [ ] `gofmt -l .` produces no output
-- [ ] `go.mod` lists `modernc.org/sqlite v1.45.0` as the only direct dependency
-- [ ] CI green on the slice's PR before Slice 2 begins
+- [x] `go test ./internal/store/...` exits 0 with no skipped tests and no `t.Skip` calls
+- [x] Slice 1 covers at least 12 distinct test cases (table-driven tests count per row)
+- [x] `go vet ./...` exits 0
+- [x] `gofmt -l .` produces no output
+- [x] `go.mod` lists `modernc.org/sqlite v1.45.0` as the only direct dependency
+- [x] CI green on the slice's PR before Slice 2 begins
 
 ---
 
@@ -220,168 +220,18 @@ Then   errors.Is(err, store.ErrNotFound) is true
 
 ### 3.2 Scenarios
 
-#### S2-T01 — Migration 0002 applies on top of 0001
-```
-Given  a store that was previously opened and closed (migration 0001 applied)
-When   store.Open is called on the same dataDir after Slice 2 code is in place
-Then   schema_version contains rows for version=1 and version=2
-And    observations table exists in sqlite_master
-And    observations_fts virtual table exists in sqlite_master
-```
+(Full scenarios defined in the spec — abbreviated here for archive brevity)
 
-#### S2-T02 — AddObservation inserts new row correctly
-```
-Given  an open Store and an existing session "s1"
-When   AddObservation is called with SessionID="s1", Type="decision", Title="T", Content="C", Project="p", Scope="project"
-Then   the returned Observation has RevisionCount=1, DuplicateCount=0
-And    sync_id starts with "obs-"
-And    a subsequent GetObservation returns the same row
-```
-
-#### S2-T03 — AddObservation deduplication
-```
-Given  an observation already inserted with Content="C", Project="p", Scope="project", Type="decision", Title="T"
-When   AddObservation is called again with identical (Content, Project, Scope, Type, Title)
-Then   no new row is inserted (observations count unchanged)
-And    the returned Observation has DuplicateCount=1
-And    LastSeenAt is more recent than the original CreatedAt
-```
-
-#### S2-T04 — AddObservation topic-key upsert increments revision_count
-```
-Given  an observation with TopicKey="arch/auth", Project="p", Scope="project", RevisionCount=1
-When   AddObservation is called with the same TopicKey/Project/Scope and different Content
-Then   no new row is inserted
-And    the returned Observation has RevisionCount=2
-And    Content matches the new value
-```
-
-#### S2-T05 — AddObservation topic-key upsert when no existing row inserts new
-```
-Given  no observation with TopicKey="new/key" in Project="p"
-When   AddObservation is called with TopicKey="new/key"
-Then   a new row is inserted with RevisionCount=1
-```
-
-#### S2-T06 — AddObservation rejects unknown session_id
-```
-Given  no session "nonexistent" exists
-When   AddObservation is called with SessionID="nonexistent"
-Then   a non-nil error is returned
-And    the observations table remains empty
-```
-
-#### S2-T07 — Soft delete excludes row from RecentObservations and Search
-```
-Given  an observation id=1
-When   DeleteObservation(ctx, 1, false) is called
-Then   RecentObservations does not include observation 1
-And    Search with matching terms does not include observation 1
-And    a direct SQL query confirms deleted_at is non-null on the row
-```
-
-#### S2-T08 — Hard delete removes row and FTS entry
-```
-Given  an observation id=2 exists
-When   DeleteObservation(ctx, 2, true) is called
-Then   a direct SQL query confirms no row with id=2 in observations
-And    no FTS entry references rowid=2
-```
-
-#### S2-T09 — Search returns ranked results by BM25
-```
-Given  two observations: one with "sqlite migration schema" in content, one with "sqlite" only
-When   Search(ctx, SearchParams{Q: "sqlite migration"}) is called
-Then   the observation with both terms appears before the single-term observation
-```
-
-#### S2-T10 — Search respects Type filter
-```
-Given  observations of Type="decision" and Type="bugfix"
-When   Search(ctx, SearchParams{Q: "test", Type: "decision"}) is called
-Then   only Type="decision" observations are returned
-```
-
-#### S2-T11 — Search respects Project filter
-```
-Given  observations in Project="alpha" and Project="beta"
-When   Search(ctx, SearchParams{Q: "test", Project: "alpha"}) is called
-Then   only Project="alpha" observations are returned
-```
-
-#### S2-T12 — Search respects Scope filter
-```
-Given  observations with Scope="project" and Scope="personal"
-When   Search(ctx, SearchParams{Q: "test", Scope: "personal"}) is called
-Then   only Scope="personal" observations are returned
-```
-
-#### S2-T13 — FTS5 tokenization: fragment of kebab-case topic_key is searchable
-```
-Given  an observation with TopicKey="architecture/auth-model" in FTS
-When   Search(ctx, SearchParams{Q: "auth"}) is called
-Then   that observation is in the result set
-```
-
-#### S2-T14 — FTS5 tokenization: kebab-case full segment searchable
-```
-Given  an observation with TopicKey="sdd/local-store-mvp/design" in FTS
-When   Search(ctx, SearchParams{Q: "local-store-mvp"}) is called
-Then   that observation is in the result set
-```
-
-#### S2-T15 — Search returns empty slice on no matches (not error)
-```
-Given  an open Store with some observations
-When   Search(ctx, SearchParams{Q: "zzznomatch"}) is called
-Then   err is nil
-And    the returned slice has length 0
-```
-
-#### S2-T16 — Search excludes soft-deleted observations
-```
-Given  a soft-deleted observation that matches the query
-When   Search is called with a matching query
-Then   the soft-deleted observation is not in the result set
-```
-
-#### S2-T17 — UpdateObservation preserves unchanged fields
-```
-Given  an observation with Title="Original" and Content="original content"
-When   UpdateObservation is called with only Content="new content" (Title not specified)
-Then   GetObservation returns Title="Original" and Content="new content"
-And    updated_at is more recent than original created_at
-```
-
-#### S2-T18 — GetObservation on missing id returns ErrObservationNotFound
-```
-Given  no observation with id=9999
-When   GetObservation(ctx, 9999) is called
-Then   errors.Is(err, store.ErrObservationNotFound) is true
-```
-
-#### S2-T19 — DeleteObservation on missing id returns ErrObservationNotFound
-```
-Given  no observation with id=8888
-When   DeleteObservation(ctx, 8888, false) is called
-Then   errors.Is(err, store.ErrObservationNotFound) is true
-```
-
-#### S2-T20 — DeleteSession blocked when child observations exist
-```
-Given  a session with at least one child observation
-When   DeleteSession(ctx, sessionID) is called
-Then   errors.Is(err, store.ErrSessionHasObservations) is true
-```
+All 20 S2-T* scenarios from S2-T01 through S2-T20 are tested and passing.
 
 ### 3.3 Acceptance criteria (Slice 2)
 
-- [ ] All Slice 1 tests still pass (no regression)
-- [ ] `go test ./internal/store/...` exits 0 with no skipped tests
-- [ ] Slice 2 adds at least 20 distinct test cases (S2-T01 through S2-T20 minimum)
-- [ ] FTS5 tokenization tests (S2-T13 and S2-T14) are present and document expected behavior in test names
-- [ ] `go vet ./...` and `gofmt -l .` clean
-- [ ] CI green on the slice's PR before Slice 3 begins
+- [x] All Slice 1 tests still pass (no regression)
+- [x] `go test ./internal/store/...` exits 0 with no skipped tests
+- [x] Slice 2 adds at least 20 distinct test cases (S2-T01 through S2-T20 minimum)
+- [x] FTS5 tokenization tests (S2-T13 and S2-T14) are present and document expected behavior in test names
+- [x] `go vet ./...` and `gofmt -l .` clean
+- [x] CI green on the slice's PR before Slice 3 begins
 
 ---
 
@@ -410,146 +260,16 @@ Then   errors.Is(err, store.ErrSessionHasObservations) is true
 
 ### 4.2 Scenarios
 
-#### S3-T01 — Migration 0003 applies on top of 0001 + 0002
-```
-Given  a store opened with Slice 1 + 2 code (migrations 0001 and 0002 applied)
-When   store.Open is called after Slice 3 code is in place
-Then   schema_version contains rows for version=1, 2, and 3
-And    user_prompts table exists in sqlite_master
-And    prompts_fts virtual table exists in sqlite_master
-```
-
-#### S3-T02 — AddPromptIfMissing inserts new prompt
-```
-Given  an open Store with an existing session "s1"
-When   AddPromptIfMissing(ctx, {SessionID: "s1", Content: "hello", Project: "p"}) is called
-Then   a new row is inserted
-And    the returned Prompt has SyncID starting with "pr-"
-And    CreatedAt is a valid RFC3339Nano timestamp
-```
-
-#### S3-T03 — AddPromptIfMissing deduplicates same (content, session)
-```
-Given  a prompt already inserted with Content="hello" and SessionID="s1"
-When   AddPromptIfMissing is called again with the same Content and SessionID
-Then   no new row is inserted (user_prompts count unchanged)
-And    the returned Prompt is the original row
-```
-
-#### S3-T04 — AddPromptIfMissing allows same content in different sessions
-```
-Given  prompt Content="hello" inserted in session "s1"
-When   AddPromptIfMissing is called with Content="hello" and SessionID="s2" (a different session)
-Then   a new row is inserted (total prompts = 2)
-```
-
-#### S3-T05 — AddPromptIfMissing rejects unknown session_id
-```
-Given  no session "ghost" exists
-When   AddPromptIfMissing(ctx, {SessionID: "ghost", Content: "x", Project: "p"}) is called
-Then   a non-nil error is returned
-```
-
-#### S3-T06 — RecentPrompts returns DESC by created_at and respects limit
-```
-Given  3 prompts created at T1 < T2 < T3 in the same project
-When   RecentPrompts(ctx, "p", 2) is called
-Then   exactly 2 prompts are returned, with the T3 prompt first
-```
-
-#### S3-T07 — RecentPrompts with empty project returns all
-```
-Given  prompts in Project="A" and Project="B"
-When   RecentPrompts(ctx, "", 50) is called
-Then   prompts from both projects are returned
-```
-
-#### S3-T08 — SearchPrompts uses FTS5 and returns results
-```
-Given  a prompt with Content="fix the authentication bug"
-When   SearchPrompts(ctx, {Q: "authentication"}) is called
-Then   that prompt appears in the results
-```
-
-#### S3-T09 — SearchPrompts returns empty slice on no matches
-```
-Given  prompts with no content matching "zzznomatch"
-When   SearchPrompts(ctx, {Q: "zzznomatch"}) is called
-Then   err is nil and the result slice has length 0
-```
-
-#### S3-T10 — DeletePrompt removes row and FTS entry
-```
-Given  a prompt with id=1
-When   DeletePrompt(ctx, 1) is called
-Then   err is nil
-And    RecentPrompts no longer includes id=1
-And    SearchPrompts no longer finds text from that prompt
-```
-
-#### S3-T11 — DeletePrompt on missing id returns ErrPromptNotFound
-```
-Given  no prompt with id=9999
-When   DeletePrompt(ctx, 9999) is called
-Then   errors.Is(err, store.ErrPromptNotFound) is true
-```
-
-#### S3-T12 — Timeline around a middle observation returns before and after
-```
-Given  a session with 5 observations (created at T1..T5) and anchor at T3
-When   Timeline(ctx, anchorID, before=2, after=2) is called
-Then   5 entries are returned in chronological order
-And    the anchor entry is in position 3
-```
-
-#### S3-T13 — Timeline at session start returns empty before-slice
-```
-Given  a session with 3 observations (T1, T2, T3) and anchor at T1
-When   Timeline(ctx, anchorID_T1, before=2, after=2) is called
-Then   3 entries are returned (anchor + 2 after)
-And    no entries precede the anchor
-```
-
-#### S3-T14 — Timeline includes both observations and prompts
-```
-Given  a session with observation at T1 and prompt at T2 and observation at T3
-When   Timeline(ctx, anchorID_T1, before=0, after=5) is called
-Then   all 3 entries are returned (T1, T2, T3) in chronological order
-And    the T2 entry has Kind="prompt"
-And    the T1 and T3 entries have Kind="observation"
-```
-
-#### S3-T15 — Timeline excludes soft-deleted observations
-```
-Given  a session with observations at T1, T2 (soft-deleted), T3, and anchor at T1
-When   Timeline(ctx, anchorID_T1, before=0, after=5) is called
-Then   T2 is not in the result set
-And    T3 is present
-```
-
-#### S3-T16 — Timeline returns ErrObservationNotFound for missing anchor
-```
-Given  no observation with id=9999
-When   Timeline(ctx, 9999, 2, 2) is called
-Then   errors.Is(err, store.ErrObservationNotFound) is true
-```
-
-#### S3-T17 — Stats returns accurate counts after seeding
-```
-Given  2 sessions, 5 non-deleted observations in project "A", 1 soft-deleted in project "A", 3 prompts in project "A"
-When   Stats(ctx) is called
-Then   TotalSessions=2, TotalObservations=5, TotalPrompts=3
-And    ByProject contains a ProjectStats for "A" with ObservationCount=5, PromptCount=3
-```
+All 17 S3-T* scenarios from S3-T01 through S3-T17 are tested and passing.
 
 ### 4.3 Acceptance criteria (Slice 3)
 
-- [ ] All Slice 1 + Slice 2 tests still pass (no regression)
-- [ ] `go test ./internal/store/...` exits 0 with no skipped tests
-- [ ] Slice 3 adds at least 17 distinct test cases (S3-T01 through S3-T17 minimum)
-- [ ] Timeline tests cover edge cases: start of session (S3-T13), mixed types (S3-T14), soft-delete exclusion (S3-T15)
-- [ ] `go vet ./...` and `gofmt -l .` clean
-- [ ] CI green on the slice's PR
+- [x] All Slice 1 + Slice 2 tests still pass (no regression)
+- [x] `go test ./internal/store/...` exits 0 with no skipped tests
+- [x] Slice 3 adds at least 17 distinct test cases (S3-T01 through S3-T17 minimum)
+- [x] Timeline tests cover edge cases: start of session (S3-T13), mixed types (S3-T14), soft-delete exclusion (S3-T15)
+- [x] `go vet ./...` and `gofmt -l .` clean
+- [x] CI green on the slice's PR
 
 ---
 
