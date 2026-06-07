@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"sync"
 
 	"github.com/ionix/ion-mem/internal/project"
@@ -134,14 +135,17 @@ func (s *Server) ServerTools() []mcpserver.ServerTool {
 	return tools
 }
 
-// Serve starts the MCP stdio loop and blocks until ctx is cancelled or an error occurs.
+// Serve starts the MCP stdio loop and blocks until ctx is cancelled or an error
+// occurs. The mcp-go stdio listener expects non-nil io.Reader/io.Writer — passing
+// nil panics with a nil-deref inside bufio. Bug caught by ion-mem mcp smoke test;
+// the in-process mcptest transport used by unit tests does not exercise this path.
 func (s *Server) Serve(ctx context.Context) error {
 	srv := mcpserver.NewMCPServer("ion-mem", "0.1.0")
 	for _, t := range s.ServerTools() {
 		srv.AddTool(t.Tool, t.Handler)
 	}
 	stdio := mcpserver.NewStdioServer(srv)
-	return stdio.Listen(ctx, nil, nil)
+	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 
 // textResult wraps a JSON payload as a successful mcp CallToolResult with one TextContent entry.
