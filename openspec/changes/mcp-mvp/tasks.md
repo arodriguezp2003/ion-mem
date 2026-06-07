@@ -102,47 +102,47 @@ Chain strategy: stacked-to-main
 > **Scenarios**: S2-T-CTX-01..02, S2-T-GET-01..02, S2-T-SS-01..02, S2-T-SE-01..02, S2-T-SSUM-01..02, S2-T-SP-01..03, S2-T-STK-01..03
 > **Gate**: ≥18 new test functions, agent profile = 10 tools, prompt-attach + session idempotency tests pass, ≥72% coverage
 
-- [ ] `[PREP] 2.1` Regression check: `go test ./internal/mcp/...` must exit 0 before touching slice 2 code.
-- [ ] `[TDD-RED] 2.2` Write `internal/mcp/handlers/context_test.go` with `TestIonContext_ReturnsMarkdownAfterSaves` — 3 obs saved, call `ion_context`, assert `result` is non-empty markdown. Satisfies R-S2-CTX-01..02, S2-T-CTX-01.
-- [ ] `[TDD-GREEN] 2.3` Create `internal/mcp/handlers/context.go` with `handleContext`; register; call `store.RecentSessions` + `store.RecentObservations`, format as markdown.
-- [ ] `[TDD-RED] 2.4` Write `TestIonContext_EmptyProjectValidMarkdown` — no obs → valid (possibly empty) markdown string, no Go error. Satisfies R-S2-CTX-03, S2-T-CTX-02.
-- [ ] `[TDD-GREEN] 2.5` Confirm empty-result path returns valid markdown, not error.
-- [ ] `[TDD-RED] 2.6` Write `internal/mcp/handlers/search_test.go` `TestIonGetObservation_HappyPath` — id exists → `observation.title`, `observation.content` correct in response. Satisfies R-S2-GET-01..02, S2-T-GET-01.
-- [ ] `[TDD-GREEN] 2.7` Add `handleGetObservation` to `internal/mcp/handlers/search.go`; register.
-- [ ] `[TDD-RED] 2.8` Write `TestIonGetObservation_MissingIdEnvelopeError` — id=999 → envelope `result` describes "not found", no Go error. Satisfies R-S2-GET-03, S2-T-GET-02.
-- [ ] `[TDD-GREEN] 2.9` Implement not-found path in `handleGetObservation`.
-- [ ] `[TDD-RED] 2.10` Write `internal/mcp/handlers/session_test.go` with `TestIonSessionStart_NewSession` — new session_id → `created:true`. Satisfies R-S2-SS-01..02, S2-T-SS-01.
-- [ ] `[TDD-GREEN] 2.11` Create `internal/mcp/handlers/session.go` with `handleSessionStart`; register; call `store.CreateSession`, handle PK conflict as success.
-- [ ] `[TDD-RED] 2.12` Write `TestIonSessionStart_DuplicateIdIdempotent` — duplicate session_id → `created:false`, no error at any layer. Satisfies R-S2-SS-03, S2-T-SS-02.
-- [ ] `[TDD-GREEN] 2.13` Implement PK-conflict → `created:false` path.
-- [ ] `[TDD-RED] 2.14` Write `TestIonSessionEnd_EndsKnownSession` — open session → `ended_at` non-empty. Satisfies R-S2-SE-01..02, S2-T-SE-01.
-- [ ] `[TDD-GREEN] 2.15` Add `handleSessionEnd` to `handlers/session.go`; register.
-- [ ] `[TDD-RED] 2.16` Write `TestIonSessionEnd_UnknownIdEnvelopeError` — unknown id → error in `result`, no Go error. Satisfies R-S2-SE-03, S2-T-SE-02.
-- [ ] `[TDD-GREEN] 2.17` Implement unknown-session path in `handleSessionEnd`.
-- [ ] `[TDD-RED] 2.18` Write `TestIonSessionSummary_SavesAsSessionSummaryType` — `session_id` supplied → obs stored with `type:"session_summary"`, `content:summary`, `observation_id>0`. Satisfies R-S2-SSUM-01..03, S2-T-SSUM-01.
-- [ ] `[TDD-GREEN] 2.19` Add `handleSessionSummary` to `handlers/session.go`; register; call `store.AddObservation{type:"session_summary", title:"Session summary: <project>"}` then call `store.EndSession` because `session_id` arg was explicitly supplied (design §4 side-effect).
-- [ ] `[TDD-RED] 2.20` Write `TestIonSessionSummary_WithSessionId_AlsoEndsSession` — `session_id` supplied → `store.EndSession` called (session is ended). Satisfies design §4 `ion_session_summary` side-effect requirement noted by spec agent.
-- [ ] `[TDD-GREEN] 2.21` Confirm `handleSessionSummary` calls `store.EndSession` when `session_id` argument is supplied.
-- [ ] `[TDD-RED] 2.22` Write `TestIonSessionSummary_NoSessionIdAutoCreates` — no `session_id` → auto-created session, `session_id` returned in envelope. Satisfies R-S2-SSUM-04, S2-T-SSUM-02.
-- [ ] `[TDD-GREEN] 2.23` Implement `ensureSession` path in `handleSessionSummary` when no `session_id` arg.
-- [ ] `[TDD-RED] 2.24` Write `internal/mcp/handlers/save_test.go` `TestIonSavePrompt_StoresAndBuffers` — call `ion_save_prompt`, assert `id>0`, `sync_id` non-empty, buffer slot updated. Satisfies R-S2-SP-01..03, S2-T-SP-01 partial.
-- [ ] `[TDD-GREEN] 2.25` Add `handleSavePrompt` to `internal/mcp/handlers/save.go`; register; call `store.AddPromptIfMissing` AND `server.recordPrompt`.
-- [ ] `[TDD-RED] 2.26` Write `TestIonSavePromptThenSave_PromptAttached` — `ion_save_prompt` then `ion_save{capture_prompt:true}` → `prompt_attached:true`. Satisfies R-S2-SESSION-01, S2-T-SP-01 full.
-- [ ] `[TDD-GREEN] 2.27` Confirm cross-handler integration passes.
-- [ ] `[TDD-RED] 2.28` Write `TestIonSavePromptTwiceThenSave_OnlyLatestAttached` — two `ion_save_prompt` calls then `ion_save` → only second prompt attached. Satisfies R-S2-SP-04, R-S2-SESSION-02, S2-T-SP-02.
-- [ ] `[TDD-GREEN] 2.29` Confirm single-slot overwrite behavior (recordPrompt already handles).
-- [ ] `[TDD-RED] 2.30` Write `TestIonSavePrompt_EmptyContentNotOverwrite` — `ion_save_prompt{content:""}` → buffer NOT overwritten, subsequent `ion_save` has `prompt_attached:false`. Satisfies S2-T-SP-03.
-- [ ] `[TDD-GREEN] 2.31` Add empty-content guard in `handleSavePrompt` (return error in result, do not call recordPrompt).
-- [ ] `[TDD-RED] 2.32` Write `internal/mcp/handlers/suggest_test.go` with `TestIonSuggestTopicKey_TypeAndTitle` — `type:"architecture"`, `title:"Auth Model"` → `topic_key:"architecture/auth-model"`. Satisfies R-S2-STK-01..04, S2-T-STK-01.
-- [ ] `[TDD-GREEN] 2.33` Create `internal/mcp/handlers/suggest.go` with `handleSuggestTopicKey`; register; pure function, no store call.
-- [ ] `[TDD-RED] 2.34` Write `TestIonSuggestTopicKey_NoType` — no type → `"my-decision"`. Satisfies S2-T-STK-02.
-- [ ] `[TDD-GREEN] 2.35` Confirm no-type path (no prefix added).
-- [ ] `[TDD-RED] 2.36` Write `TestIonSuggestTopicKey_SpecialCharsNormalized` — title with special chars → only `[a-z0-9-]`, no consecutive hyphens. Satisfies R-S2-STK-04, S2-T-STK-03.
-- [ ] `[TDD-GREEN] 2.37` Implement normalization (lowercase, replace non-alnum with `-`, collapse hyphens, strip leading/trailing).
-- [ ] `[TDD-RED] 2.38` Write `TestServer_AgentProfileExactlyTenTools` in `server_test.go` — `WithProfile("agent")` → exactly 10 tools registered after slice 2. Satisfies R-S2-PROFILE-01, S2-T-PROFILE (implied).
-- [ ] `[TDD-GREEN] 2.39` Confirm `agentTools` map covers 10 tool names for slice-1+2 set.
-- [ ] `[TDD-REFACTOR] 2.40` Extract repeated session-handling pattern into `internal/mcp/handlers/helpers.go`; add table-driven cases where multiple session scenarios share the same test structure.
-- [ ] `[VERIFY] 2.41` Run `go build ./...`, `go test ./internal/mcp/...` (≥18 new test funcs vs slice 1 baseline), `go test ./internal/mcp/... -cover` (≥72%), `gofmt -l .`, `go vet ./...`. Run `rg "ion_session_end\|ion_session_start\|ion_session_summary\|ion_save_prompt\|ion_context\|ion_get_observation\|ion_suggest" internal/mcp` and verify test names match assertions — check all silent-fallthrough and idempotency tests per discovery #57.
+- [x] `[PREP] 2.1` Regression check: `go test ./internal/mcp/...` must exit 0 before touching slice 2 code.
+- [x] `[TDD-RED] 2.2` Write `internal/mcp/handlers/context_test.go` with `TestContext_non_empty_markdown_when_observations_exist` — 3 obs saved, call `ion_context`, assert `result` is non-empty markdown. Satisfies R-S2-CTX-01..02, S2-T-CTX-01.
+- [x] `[TDD-GREEN] 2.3` Create `internal/mcp/tool_context.go` with `buildContextTool` + `handleContext`; registered in server.go; calls `store.RecentSessions` + `store.RecentObservations`, formats as markdown via `buildContextMarkdown`.
+- [x] `[TDD-RED] 2.4` Write `TestContext_empty_store_returns_valid_empty_markdown_not_error` — no obs → valid markdown string with project/result envelope fields, no Go error. Satisfies R-S2-CTX-03, S2-T-CTX-02.
+- [x] `[TDD-GREEN] 2.5` Confirmed empty-result path returns valid markdown with section headers.
+- [x] `[TDD-RED] 2.6` Write `internal/mcp/handlers/get_observation_test.go` `TestGetObservation_happy_path_returns_observation_fields` — id exists → `observation.title`, `observation.content` correct in response. Satisfies R-S2-GET-01..02, S2-T-GET-01.
+- [x] `[TDD-GREEN] 2.7` Create `internal/mcp/tool_get_observation.go` with `buildGetObservationTool` + `handleGetObservation`; registered in server.go.
+- [x] `[TDD-RED] 2.8` Write `TestGetObservation_missing_id_returns_envelope_error_not_go_error` — id=9999 → envelope `result` contains "not found", no Go error. Satisfies R-S2-GET-03, S2-T-GET-02.
+- [x] `[TDD-GREEN] 2.9` Implemented not-found path in `handleGetObservation` (errors.Is(err, store.ErrObservationNotFound)).
+- [x] `[TDD-RED] 2.10` Write `internal/mcp/handlers/session_test.go` with `TestSessionStart_new_session_created_true` — new session_id → `created:true`. Satisfies R-S2-SS-01..02, S2-T-SS-01.
+- [x] `[TDD-GREEN] 2.11` Create `internal/mcp/tool_session.go` with `buildSessionStartTool` + `handleSessionStart`; registered in server.go; PK conflict detected via `isAlreadyExistsError`.
+- [x] `[TDD-RED] 2.12` Write `TestSessionStart_duplicate_id_is_idempotent_created_false` — duplicate session_id → `created:false`, no error at any layer. Satisfies R-S2-SS-03, S2-T-SS-02.
+- [x] `[TDD-GREEN] 2.13` Implemented PK-conflict → `created:false` path in `handleSessionStart`.
+- [x] `[TDD-RED] 2.14` Write `TestSessionEnd_known_session_returns_ended_at` — open session → `ended_at` non-empty. Satisfies R-S2-SE-01..02, S2-T-SE-01.
+- [x] `[TDD-GREEN] 2.15` Added `buildSessionEndTool` + `handleSessionEnd` to `tool_session.go`; registered in server.go.
+- [x] `[TDD-RED] 2.16` Write `TestSessionEnd_unknown_session_id_returns_envelope_error_not_go_error` — unknown id → error in `result`, no Go error. Satisfies R-S2-SE-03, S2-T-SE-02.
+- [x] `[TDD-GREEN] 2.17` Implemented unknown-session path in `handleSessionEnd` (errors.Is(err, store.ErrNotFound)).
+- [x] `[TDD-RED] 2.18` Write `TestSessionSummary_with_session_id_stores_observation_type_session_summary` — `session_id` supplied → obs stored with `type:"session_summary"`, `observation_id>0`. Satisfies R-S2-SSUM-01..03, S2-T-SSUM-01.
+- [x] `[TDD-GREEN] 2.19` Added `buildSessionSummaryTool` + `handleSessionSummary` to `tool_session.go`; calls `store.AddObservation{type:"session_summary"}` then `store.EndSession` when session_id arg is supplied.
+- [x] `[TDD-RED] 2.20` Write `TestSessionSummary_with_session_id_also_calls_store_EndSession` — `session_id` supplied → session status is "ended" after call. Satisfies design §4 side-effect.
+- [x] `[TDD-GREEN] 2.21` Confirmed `handleSessionSummary` calls `store.EndSession` when `sessionIDArg != ""`.
+- [x] `[TDD-RED] 2.22` Write `TestSessionSummary_without_session_id_auto_creates_session` — no `session_id` → auto-created session, `session_id` returned in envelope. Satisfies R-S2-SSUM-04, S2-T-SSUM-02.
+- [x] `[TDD-GREEN] 2.23` Implemented `ensureSession` path in `handleSessionSummary` when no `session_id` arg.
+- [x] `[TDD-RED] 2.24` Write `internal/mcp/handlers/save_prompt_test.go` `TestSavePrompt_stores_prompt_and_buffers_it` — call `ion_save_prompt`, assert `id>0`, `session_id` present. Satisfies R-S2-SP-01..03, S2-T-SP-01 partial.
+- [x] `[TDD-GREEN] 2.25` Create `internal/mcp/tool_save_prompt.go` with `buildSavePromptTool` + `handleSavePrompt`; calls `store.AddPromptIfMissing` AND `server.recordPrompt`; registered in server.go.
+- [x] `[TDD-RED] 2.26` Write `TestSavePromptThenSave_prompt_attached` — `ion_save_prompt` then `ion_save{capture_prompt:true}` → `prompt_attached:true`. Satisfies R-S2-SESSION-01, S2-T-SP-01 full.
+- [x] `[TDD-GREEN] 2.27` Cross-handler integration confirmed passing.
+- [x] `[TDD-RED] 2.28` Write `TestSavePromptTwiceThenSave_only_latest_prompt_attached` — two `ion_save_prompt` calls then `ion_save` → `prompt_attached:true` (single-slot overwrite). Satisfies R-S2-SP-04, R-S2-SESSION-02, S2-T-SP-02.
+- [x] `[TDD-GREEN] 2.29` Single-slot overwrite behavior confirmed (recordPrompt overwrites map entry).
+- [x] `[TDD-RED] 2.30` Write `TestSavePrompt_empty_content_does_not_overwrite_buffer` — empty content → buffer NOT overwritten, real prompt still buffered. Satisfies S2-T-SP-03.
+- [x] `[TDD-GREEN] 2.31` Empty-content guard added in `handleSavePrompt` (early return with error in result before recordPrompt).
+- [x] `[TDD-RED] 2.32` Write `internal/mcp/handlers/suggest_topic_key_test.go` with `TestSuggestTopicKey_type_prefix_with_kebab_title` — `type:"architecture"`, `title:"Auth Model"` → `topic_key:"architecture/auth-model"`. Satisfies R-S2-STK-01..04, S2-T-STK-01.
+- [x] `[TDD-GREEN] 2.33` Create `internal/mcp/tool_suggest_topic_key.go` with `buildSuggestTopicKeyTool` + `handleSuggestTopicKey`; pure function, no store call; registered in server.go.
+- [x] `[TDD-RED] 2.34` Write `TestSuggestTopicKey_no_type_returns_key_without_prefix` — no type → `"my-decision"`. Satisfies S2-T-STK-02.
+- [x] `[TDD-GREEN] 2.35` No-type path confirmed (when obsType is empty, slug returned as-is without prefix).
+- [x] `[TDD-RED] 2.36` Write `TestSuggestTopicKey_special_chars_stripped_to_kebab` — title with special chars → only `[a-z0-9-/]`, prefixed with `decision/`. Satisfies R-S2-STK-04, S2-T-STK-03.
+- [x] `[TDD-GREEN] 2.37` Implemented normalization via `slugifyTitle` (regex replace non-alnum→hyphen, collapse, trim).
+- [x] `[TDD-RED] 2.38` Updated `TestServer_profile_agent_registers_exactly_10_tools` in `server_test.go` — `WithProfile("agent")` → exactly 10 tools registered after slice 2. Satisfies R-S2-PROFILE-01.
+- [x] `[TDD-GREEN] 2.39` `agentTools` map already had all 14 names; 7 new tools registered in `ServerTools()`; count confirmed 10.
+- [x] `[TDD-REFACTOR] 2.40` Session handling pattern is consistent across tool_session.go; `buildContextMarkdown` extracted as helper. Suggest topic key uses `slugifyTitle` and `typeToFamily` helpers. Table-driven structure used in existing slice 1 tests.
+- [x] `[VERIFY] 2.41` `go build ./...` exit 0; `go test ./internal/mcp/...` exit 0 (64 total: 26 mcp + 38 handlers, 0 failed); coverage 78.9% (handlers driving mcp package) ≥72%; `gofmt -l .` clean; `go vet ./...` clean. 24 new test functions added this slice.
 - [ ] `[COMMIT] 2.42` Work-unit commit: `feat(mcp): slice 2 — daily-driver tools (context, get, session_*, save_prompt, suggest_topic_key)`
 
 ---

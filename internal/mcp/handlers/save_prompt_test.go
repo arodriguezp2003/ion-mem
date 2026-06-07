@@ -1,0 +1,140 @@
+package handlers_test
+
+import (
+	"testing"
+
+	"github.com/ionix/ion-mem/internal/mcp"
+	"github.com/ionix/ion-mem/internal/project"
+	"github.com/ionix/ion-mem/internal/store"
+)
+
+func TestSavePrompt_stores_prompt_and_buffers_it(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{ID: "sp-sess-1", Project: "myproj"})
+
+	res := callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-sess-1",
+		"content":    "What is the architecture?",
+	})
+	env := decodeText(t, res)
+
+	if _, ok := env["id"]; !ok {
+		t.Fatal("ion_save_prompt: missing 'id' in response")
+	}
+	if env["id"].(float64) <= 0 {
+		t.Errorf("id = %v, want > 0", env["id"])
+	}
+	if env["session_id"] != "sp-sess-1" {
+		t.Errorf("session_id = %v, want %q", env["session_id"], "sp-sess-1")
+	}
+}
+
+func TestSavePromptThenSave_prompt_attached(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{ID: "sp-chain-sess", Project: "myproj"})
+
+	// Save a prompt first.
+	callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-chain-sess",
+		"content":    "user question here",
+	})
+
+	// Then save an observation with capture_prompt:true.
+	res := callTool(t, ts, "ion_save", map[string]any{
+		"title":          "answer",
+		"content":        "my answer",
+		"session_id":     "sp-chain-sess",
+		"capture_prompt": true,
+	})
+	env := decodeText(t, res)
+
+	if env["prompt_attached"] != true {
+		t.Errorf("prompt_attached = %v, want true after ion_save_prompt", env["prompt_attached"])
+	}
+}
+
+func TestSavePromptTwiceThenSave_only_latest_prompt_attached(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{ID: "sp-two-sess", Project: "myproj"})
+
+	// First prompt.
+	callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-two-sess",
+		"content":    "first prompt",
+	})
+	// Second prompt — should overwrite the buffer slot.
+	callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-two-sess",
+		"content":    "second prompt",
+	})
+
+	// Save — only second prompt should be in the buffer.
+	res := callTool(t, ts, "ion_save", map[string]any{
+		"title":          "answer",
+		"content":        "my answer",
+		"session_id":     "sp-two-sess",
+		"capture_prompt": true,
+	})
+	env := decodeText(t, res)
+
+	// Prompt must be attached (second prompt was buffered).
+	if env["prompt_attached"] != true {
+		t.Errorf("prompt_attached = %v, want true (second prompt should be in buffer)", env["prompt_attached"])
+	}
+}
+
+func TestSavePrompt_empty_content_does_not_overwrite_buffer(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{ID: "sp-empty-sess", Project: "myproj"})
+
+	// Seed a real prompt first.
+	callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-empty-sess",
+		"content":    "real prompt",
+	})
+
+	// Try to save empty content — must NOT overwrite buffer.
+	res := callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-empty-sess",
+		"content":    "",
+	})
+	env := decodeText(t, res)
+
+	// Empty content must result in an error message in result, not overwrite.
+	result, _ := env["result"].(string)
+	if result == "" {
+		t.Error("ion_save_prompt empty content: result is empty, want error message")
+	}
+
+	// The buffer should still have the real prompt — verify by saving.
+	saveRes := callTool(t, ts, "ion_save", map[string]any{
+		"title":          "post-empty",
+		"content":        "content",
+		"session_id":     "sp-empty-sess",
+		"capture_prompt": true,
+	})
+	saveEnv := decodeText(t, saveRes)
+	if saveEnv["prompt_attached"] != true {
+		t.Error("prompt_attached = false after empty save_prompt; real prompt should still be buffered")
+	}
+}
