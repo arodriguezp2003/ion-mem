@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/ionix/ion-mem/internal/project"
 	"github.com/ionix/ion-mem/internal/store"
@@ -42,9 +43,11 @@ type Server struct {
 	defaultProj string
 	profile     string
 
-	// Project cache: first resolve result for process lifetime.
+	// Project cache: resolve result re-validated after projectCacheTTL so
+	// detection-input changes on disk are eventually picked up.
 	cacheMu       sync.Mutex
 	cachedProject *project.DetectionResult
+	cachedAt      time.Time
 
 	// Session tracking: maps project → last used session ID.
 	sessionMu      sync.Mutex

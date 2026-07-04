@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ionix/ion-mem/internal/project"
 )
@@ -151,5 +152,42 @@ func TestConfigLoader_returns_empty_when_not_set(t *testing.T) {
 	proj := configuredDefaultProject()
 	if proj != "" {
 		t.Errorf("configuredDefaultProject() = %q, want empty string when env unset", proj)
+	}
+}
+
+// TestResolveProject_cache_expires_after_ttl verifies that the process-cwd
+// detection cache is re-validated after projectCacheTTL, so detection-input
+// changes on disk (new git remote, new config) are eventually picked up.
+func TestResolveProject_cache_expires_after_ttl(t *testing.T) {
+	detect, count := makeDetectFunc(project.DetectionResult{Project: "p1", Source: "git_root", Path: "/x"}, nil)
+	s := &Server{detect: detect}
+
+	for i := 0; i < 2; i++ {
+		if _, err := s.resolveProject("", ""); err != nil {
+			t.Fatalf("resolveProject call %d: %v", i, err)
+		}
+	}
+	if got := count.Load(); got != 1 {
+		t.Fatalf("expected 1 detect call while cache is fresh, got %d", got)
+	}
+
+	// Age the cache past the TTL.
+	s.cacheMu.Lock()
+	s.cachedAt = time.Now().Add(-projectCacheTTL - time.Second)
+	s.cacheMu.Unlock()
+
+	if _, err := s.resolveProject("", ""); err != nil {
+		t.Fatalf("resolveProject after expiry: %v", err)
+	}
+	if got := count.Load(); got != 2 {
+		t.Errorf("expected re-detection after TTL expiry, got %d detect calls", got)
+	}
+
+	// The refreshed result must be re-cached (no detect on the next call).
+	if _, err := s.resolveProject("", ""); err != nil {
+		t.Fatalf("resolveProject after refresh: %v", err)
+	}
+	if got := count.Load(); got != 2 {
+		t.Errorf("expected refreshed cache to be reused, got %d detect calls", got)
 	}
 }

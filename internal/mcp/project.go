@@ -3,9 +3,16 @@ package mcp
 import (
 	"errors"
 	"os"
+	"time"
 
 	"github.com/ionix/ion-mem/internal/project"
 )
+
+// projectCacheTTL bounds how long a process-cwd detection result is trusted.
+// Detection inputs can change on disk after the server starts (a git remote
+// is added, a .ion-mem/config.json is created), so the cache is re-validated
+// instead of pinned for the process lifetime.
+const projectCacheTTL = 5 * time.Minute
 
 // isAmbiguousProjectError reports whether err wraps project.ErrAmbiguousProject.
 // Used by handlers to choose project_ambiguous vs internal as the error_code.
@@ -41,6 +48,7 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 	}
 
 	// (2) Static default project (from env/flag, set at startup).
+	// No TTL here: the value is startup config, not filesystem detection.
 	if s.defaultProj != "" {
 		s.cacheMu.Lock()
 		if s.cachedProject != nil {
@@ -53,6 +61,7 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 			Source:  "env_override",
 		}
 		s.cachedProject = &det
+		s.cachedAt = time.Now()
 		s.cacheMu.Unlock()
 		return det, nil
 	}
@@ -62,9 +71,9 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 		return s.detect(cwdArg)
 	}
 
-	// (4) Default: detect from process cwd, cached for lifetime.
+	// (4) Default: detect from process cwd, cached with TTL re-validation.
 	s.cacheMu.Lock()
-	if s.cachedProject != nil {
+	if s.cachedProject != nil && time.Since(s.cachedAt) < projectCacheTTL {
 		det := *s.cachedProject
 		s.cacheMu.Unlock()
 		return det, nil
@@ -82,9 +91,11 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 	}
 
 	s.cacheMu.Lock()
-	// Double-check after acquiring lock (another goroutine may have set it).
-	if s.cachedProject == nil {
+	// Double-check after acquiring lock (another goroutine may have refreshed
+	// it). A fresh entry wins; an expired one is overwritten with our result.
+	if s.cachedProject == nil || time.Since(s.cachedAt) >= projectCacheTTL {
 		s.cachedProject = &det
+		s.cachedAt = time.Now()
 	} else {
 		det = *s.cachedProject
 	}
