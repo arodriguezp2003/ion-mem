@@ -83,7 +83,7 @@ func (s *Store) Timeline(ctx context.Context, observationID int64, before, after
 
 	// Collect all prompts in the same session.
 	promptRows, err := s.db.QueryContext(ctx, `
-		SELECT id, sync_id, session_id, content, project, created_at
+		SELECT id, sync_id, session_id, content, project, created_at, consumed_at
 		FROM user_prompts
 		WHERE session_id=?
 		ORDER BY created_at ASC`,

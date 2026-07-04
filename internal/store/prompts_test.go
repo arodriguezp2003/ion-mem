@@ -8,6 +8,334 @@ import (
 	"github.com/ionix/ion-mem/internal/store"
 )
 
+// ---------------------------------------------------------------------------
+// ConsumeLatestPrompt tests (Phase 2 — Slice 2)
+// ---------------------------------------------------------------------------
+
+// TestConsumeLatestPrompt_Found verifies that ConsumeLatestPrompt returns the
+// unconsumed prompt and marks it consumed (consumed_at IS NOT NULL).
+func TestConsumeLatestPrompt_Found(t *testing.T) {
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	inserted := mustPrompt(t, s, sess.ID, "first prompt", "proj")
+
+	p, found, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ConsumeLatestPrompt: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if p.ID != inserted.ID {
+		t.Fatalf("returned prompt ID=%d, want %d", p.ID, inserted.ID)
+	}
+	if p.Content != "first prompt" {
+		t.Fatalf("returned Content=%q, want %q", p.Content, "first prompt")
+	}
+
+	// Direct SQL check: consumed_at must now be non-null.
+	var consumedAt *string
+	if err := s.DB().QueryRow(
+		"SELECT consumed_at FROM user_prompts WHERE id=?", inserted.ID,
+	).Scan(&consumedAt); err != nil {
+		t.Fatalf("scan consumed_at: %v", err)
+	}
+	if consumedAt == nil {
+		t.Fatal("expected consumed_at to be non-null after ConsumeLatestPrompt, got NULL")
+	}
+}
+
+// TestConsumeLatestPrompt_NotFound verifies that ConsumeLatestPrompt returns
+// (Prompt{}, false, nil) when no unconsumed row exists for the session.
+func TestConsumeLatestPrompt_NotFound(t *testing.T) {
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	// No prompt inserted — no unconsumed row.
+	p, found, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ConsumeLatestPrompt: unexpected error: %v", err)
+	}
+	if found {
+		t.Fatalf("expected found=false, got true with prompt %+v", p)
+	}
+	if p.ID != 0 {
+		t.Fatalf("expected zero Prompt, got ID=%d", p.ID)
+	}
+}
+
+// TestConsumeLatestPrompt_AlreadyConsumed verifies that a second call for the
+// same session returns (Prompt{}, false, nil) — consumed row is not re-consumed.
+func TestConsumeLatestPrompt_AlreadyConsumed(t *testing.T) {
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	mustPrompt(t, s, sess.ID, "once prompt", "proj")
+
+	// First consume — must succeed.
+	_, found1, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("first ConsumeLatestPrompt: %v", err)
+	}
+	if !found1 {
+		t.Fatal("first consume: expected found=true")
+	}
+
+	// Second consume — no unconsumed rows remain.
+	p, found2, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("second ConsumeLatestPrompt: %v", err)
+	}
+	if found2 {
+		t.Fatalf("second consume: expected found=false, got true with prompt %+v", p)
+	}
+}
+
+// TestConsumeLatestPrompt_LatestSelected verifies that when two unconsumed rows
+// exist, ConsumeLatestPrompt returns the one with the later created_at and leaves
+// the older row unconsumed so a subsequent call returns it.
+func TestConsumeLatestPrompt_LatestSelected(t *testing.T) {
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	// Insert two distinct prompts; both are unconsumed.
+	older := mustPrompt(t, s, sess.ID, "older prompt", "proj")
+	newer := mustPrompt(t, s, sess.ID, "newer prompt", "proj")
+
+	// First consume: must return the newest.
+	p1, found1, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("first ConsumeLatestPrompt: %v", err)
+	}
+	if !found1 {
+		t.Fatal("first consume: expected found=true")
+	}
+	if p1.ID != newer.ID {
+		t.Fatalf("expected newest ID=%d consumed first, got ID=%d", newer.ID, p1.ID)
+	}
+
+	// Second consume: must return the older one (still unconsumed).
+	p2, found2, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("second ConsumeLatestPrompt: %v", err)
+	}
+	if !found2 {
+		t.Fatal("second consume: expected found=true (older prompt still unconsumed)")
+	}
+	if p2.ID != older.ID {
+		t.Fatalf("expected older ID=%d on second consume, got ID=%d", older.ID, p2.ID)
+	}
+}
+
+// TestMigration0004_Applies verifies that migration 0004 adds consumed_at to
+// user_prompts and is recorded in schema_version.
+func TestMigration0004_Applies(t *testing.T) {
+	s := mustOpen(t)
+
+	// schema_version must include 4.
+	v := s.SchemaVersion()
+	if v < 4 {
+		t.Fatalf("expected SchemaVersion >= 4, got %d", v)
+	}
+
+	// Verify all four versions are recorded.
+	rows, err := s.DB().Query("SELECT version FROM schema_version ORDER BY version")
+	if err != nil {
+		t.Fatalf("query schema_version: %v", err)
+	}
+	defer rows.Close()
+	var versions []int
+	for rows.Next() {
+		var ver int
+		if err := rows.Scan(&ver); err != nil {
+			rows.Close()
+			t.Fatalf("scan schema_version: %v", err)
+		}
+		versions = append(versions, ver)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("schema_version rows.Err: %v", err)
+	}
+	for _, want := range []int{1, 2, 3, 4} {
+		if !containsInt(versions, want) {
+			t.Fatalf("expected version %d in schema_version, got: %v", want, versions)
+		}
+	}
+
+	// PRAGMA table_info must include consumed_at.
+	found := false
+	infoRows, err := s.DB().Query("PRAGMA table_info(user_prompts)")
+	if err != nil {
+		t.Fatalf("PRAGMA table_info: %v", err)
+	}
+	defer infoRows.Close()
+	for infoRows.Next() {
+		var cid int
+		var name, colType, notnull, dflt string
+		var pk int
+		_ = infoRows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk)
+		if name == "consumed_at" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("PRAGMA table_info(user_prompts) did not include consumed_at after migration 0004")
+	}
+}
+
+// TestMigration0004_ExistingRowsNullConsumedAt verifies that rows inserted
+// before migration 0004 have consumed_at=NULL after the migration applies.
+//
+// We cannot easily simulate this in a unit test by inserting before migration 0004
+// since store.Open runs all migrations. Instead we verify that new rows have
+// consumed_at=NULL immediately after insert (no automatic timestamp set).
+func TestMigration0004_ExistingRowsNullConsumedAt(t *testing.T) {
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	inserted := mustPrompt(t, s, sess.ID, "pre-consume content", "proj")
+
+	// Before any consume call, consumed_at must be NULL.
+	var consumedAt *string
+	if err := s.DB().QueryRow(
+		"SELECT consumed_at FROM user_prompts WHERE id=?", inserted.ID,
+	).Scan(&consumedAt); err != nil {
+		t.Fatalf("scan consumed_at: %v", err)
+	}
+	if consumedAt != nil {
+		t.Fatalf("expected consumed_at=NULL for freshly inserted prompt, got %q", *consumedAt)
+	}
+
+	// ConsumeLatestPrompt must NOT be called here — this test checks the default.
+	_ = ctx
+}
+
+// TestConsumeLatestPrompt_RestartDurability verifies that a prompt written by
+// one Store instance is consumable after Close+reopen on the same directory.
+func TestConsumeLatestPrompt_RestartDurability(t *testing.T) {
+	dir := t.TempDir()
+
+	// First store instance: insert a session and a prompt.
+	s1, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("Open s1: %v", err)
+	}
+	ctx := context.Background()
+	sess, err := s1.CreateSession(ctx, store.CreateSessionParams{
+		ID:        "durable-sess",
+		Project:   "proj",
+		Directory: "/tmp/proj",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	p1, err := s1.AddPromptIfMissing(ctx, store.AddPromptParams{
+		SessionID: sess.ID,
+		Content:   "durable prompt",
+		Project:   "proj",
+	})
+	if err != nil {
+		t.Fatalf("AddPromptIfMissing: %v", err)
+	}
+	if err := s1.Close(); err != nil {
+		t.Fatalf("Close s1: %v", err)
+	}
+
+	// Second store instance (simulated restart): consume the prompt.
+	s2, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("Open s2: %v", err)
+	}
+	defer s2.Close()
+
+	p2, found, err := s2.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ConsumeLatestPrompt after restart: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true after restart, got false")
+	}
+	if p2.ID != p1.ID {
+		t.Fatalf("expected prompt ID=%d after restart, got %d", p1.ID, p2.ID)
+	}
+}
+
+// TestConsumeLatestPrompt_DedupAndConsumedInteraction verifies the spec scenario:
+// AddPromptIfMissing twice same content → one row; after consume, re-add same
+// content → still one row, stays consumed.
+func TestConsumeLatestPrompt_DedupAndConsumedInteraction(t *testing.T) {
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	// Insert twice — dedup yields one row.
+	p1, err := s.AddPromptIfMissing(ctx, store.AddPromptParams{
+		SessionID: sess.ID, Content: "same content", Project: "proj",
+	})
+	if err != nil {
+		t.Fatalf("first AddPromptIfMissing: %v", err)
+	}
+	p2, err := s.AddPromptIfMissing(ctx, store.AddPromptParams{
+		SessionID: sess.ID, Content: "same content", Project: "proj",
+	})
+	if err != nil {
+		t.Fatalf("second AddPromptIfMissing: %v", err)
+	}
+	if p1.ID != p2.ID {
+		t.Fatalf("dedup: expected same ID, got %d and %d", p1.ID, p2.ID)
+	}
+	var count int
+	if err := s.DB().QueryRow("SELECT COUNT(*) FROM user_prompts WHERE session_id=?", sess.ID).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row after dedup, got %d", count)
+	}
+
+	// Consume the row.
+	_, found, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("ConsumeLatestPrompt: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+
+	// Re-add same content — dedup returns existing row (consumed), no new insert.
+	p3, err := s.AddPromptIfMissing(ctx, store.AddPromptParams{
+		SessionID: sess.ID, Content: "same content", Project: "proj",
+	})
+	if err != nil {
+		t.Fatalf("third AddPromptIfMissing: %v", err)
+	}
+	if p3.ID != p1.ID {
+		t.Fatalf("expected same row returned by dedup after consume, got ID=%d", p3.ID)
+	}
+
+	// Still only one row in the table.
+	if err := s.DB().QueryRow("SELECT COUNT(*) FROM user_prompts WHERE session_id=?", sess.ID).Scan(&count); err != nil {
+		t.Fatalf("count after re-add: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 row after re-add same content, got %d", count)
+	}
+
+	// consumed_at is still set (row remains consumed).
+	var consumedAt *string
+	if err := s.DB().QueryRow("SELECT consumed_at FROM user_prompts WHERE id=?", p1.ID).Scan(&consumedAt); err != nil {
+		t.Fatalf("scan consumed_at: %v", err)
+	}
+	if consumedAt == nil {
+		t.Fatal("expected consumed_at non-null after re-add same content, row should still be consumed")
+	}
+}
+
 // TestAddPromptIfMissing_InsertsNew verifies that AddPromptIfMissing inserts a
 // new row when no prior prompt exists for the (session, content) pair.
 func TestAddPromptIfMissing_InsertsNew(t *testing.T) {

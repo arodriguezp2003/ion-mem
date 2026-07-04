@@ -9,12 +9,13 @@ import (
 
 // Prompt represents a row in the user_prompts table.
 type Prompt struct {
-	ID        int64
-	SyncID    string
-	SessionID string
-	Content   string
-	Project   string
-	CreatedAt string
+	ID         int64
+	SyncID     string
+	SessionID  string
+	Content    string
+	Project    string
+	CreatedAt  string
+	ConsumedAt sql.NullString
 }
 
 // AddPromptParams carries the caller-supplied fields for a new prompt.
@@ -73,7 +74,7 @@ func (s *Store) AddPromptIfMissing(ctx context.Context, params AddPromptParams) 
 // getPromptByID fetches a single prompt row by primary key.
 func (s *Store) getPromptByID(ctx context.Context, id int64) (Prompt, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, sync_id, session_id, content, project, created_at
+		`SELECT id, sync_id, session_id, content, project, created_at, consumed_at
 		 FROM user_prompts WHERE id=?`,
 		id,
 	)
@@ -92,11 +93,11 @@ func (s *Store) RecentPrompts(ctx context.Context, project string, limit int) ([
 		args  []interface{}
 	)
 	if project == "" {
-		query = `SELECT id, sync_id, session_id, content, project, created_at
+		query = `SELECT id, sync_id, session_id, content, project, created_at, consumed_at
 		          FROM user_prompts ORDER BY created_at DESC LIMIT ?`
 		args = []interface{}{limit}
 	} else {
-		query = `SELECT id, sync_id, session_id, content, project, created_at
+		query = `SELECT id, sync_id, session_id, content, project, created_at, consumed_at
 		          FROM user_prompts WHERE project=? ORDER BY created_at DESC LIMIT ?`
 		args = []interface{}{project, limit}
 	}
@@ -135,7 +136,7 @@ func (s *Store) SearchPrompts(ctx context.Context, params SearchPromptsParams) (
 	}
 
 	query := `
-		SELECT p.id, p.sync_id, p.session_id, p.content, p.project, p.created_at
+		SELECT p.id, p.sync_id, p.session_id, p.content, p.project, p.created_at, p.consumed_at
 		FROM prompts_fts
 		JOIN user_prompts p ON p.id = prompts_fts.rowid
 		WHERE prompts_fts MATCH ?`
@@ -192,7 +193,7 @@ func (s *Store) DeletePrompt(ctx context.Context, id int64) error {
 // scanPrompt scans a single prompt from a *sql.Row.
 func scanPrompt(row *sql.Row) (Prompt, error) {
 	var p Prompt
-	err := row.Scan(&p.ID, &p.SyncID, &p.SessionID, &p.Content, &p.Project, &p.CreatedAt)
+	err := row.Scan(&p.ID, &p.SyncID, &p.SessionID, &p.Content, &p.Project, &p.CreatedAt, &p.ConsumedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Prompt{}, ErrPromptNotFound
 	}
@@ -205,8 +206,59 @@ func scanPrompt(row *sql.Row) (Prompt, error) {
 // scanPromptRow scans a prompt from *sql.Rows.
 func scanPromptRow(rows *sql.Rows) (Prompt, error) {
 	var p Prompt
-	if err := rows.Scan(&p.ID, &p.SyncID, &p.SessionID, &p.Content, &p.Project, &p.CreatedAt); err != nil {
+	if err := rows.Scan(&p.ID, &p.SyncID, &p.SessionID, &p.Content, &p.Project, &p.CreatedAt, &p.ConsumedAt); err != nil {
 		return Prompt{}, fmt.Errorf("store.scanPromptRow: %w", err)
 	}
 	return p, nil
+}
+
+// ConsumeLatestPrompt atomically fetches and marks consumed the latest
+// unconsumed user_prompts row for sessionID. Within a single transaction it
+// SELECTs the row with consumed_at IS NULL (ORDER BY created_at DESC, id DESC
+// LIMIT 1) and, when found, UPDATEs consumed_at to the current UTC time.
+//
+// Returns (row, true, nil) when a row is found and consumed.
+// Returns (Prompt{}, false, nil) when no unconsumed row exists.
+// Returns (Prompt{}, false, err) on database errors.
+func (s *Store) ConsumeLatestPrompt(ctx context.Context, sessionID string) (Prompt, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Prompt{}, false, fmt.Errorf("store.ConsumeLatestPrompt begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var p Prompt
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, sync_id, session_id, content, project, created_at, consumed_at
+		 FROM user_prompts
+		 WHERE session_id = ? AND consumed_at IS NULL
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		sessionID,
+	).Scan(&p.ID, &p.SyncID, &p.SessionID, &p.Content, &p.Project, &p.CreatedAt, &p.ConsumedAt)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		// No unconsumed row — commit the (read-only) transaction and return not-found.
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Prompt{}, false, fmt.Errorf("store.ConsumeLatestPrompt commit (not found): %w", commitErr)
+		}
+		return Prompt{}, false, nil
+	}
+	if err != nil {
+		return Prompt{}, false, fmt.Errorf("store.ConsumeLatestPrompt select: %w", err)
+	}
+
+	// Mark the row consumed.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE user_prompts SET consumed_at = datetime('now') WHERE id = ?`,
+		p.ID,
+	); err != nil {
+		return Prompt{}, false, fmt.Errorf("store.ConsumeLatestPrompt update: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Prompt{}, false, fmt.Errorf("store.ConsumeLatestPrompt commit: %w", err)
+	}
+
+	return p, true, nil
 }
