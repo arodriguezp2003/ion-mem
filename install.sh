@@ -185,8 +185,11 @@ BIN_DIR="$(resolve_bin_dir)"
 # ─── 1. Build binary ────────────────────────────────────────────────────────
 
 echo "[ion-mem install] Building binary via 'go install'..."
-(cd "$REPO_ROOT" && go install ./cmd/ion-mem)
-echo "[ion-mem install] Binary installed: $BIN_DIR/ion-mem"
+# Version from git: latest tag when available, else short commit hash;
+# "-dirty" suffix when the working tree has uncommitted changes.
+BUILD_VERSION="$(cd "$REPO_ROOT" && git describe --tags --always --dirty 2>/dev/null || echo dev)"
+(cd "$REPO_ROOT" && go install -ldflags "-X main.version=$BUILD_VERSION" ./cmd/ion-mem)
+echo "[ion-mem install] Binary installed: $BIN_DIR/ion-mem ($BUILD_VERSION)"
 
 # ─── 2. PATH stanza ─────────────────────────────────────────────────────────
 
