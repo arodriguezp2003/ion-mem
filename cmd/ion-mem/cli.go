@@ -125,6 +125,7 @@ Usage: ion-mem <command> [flags]
 
 Commands:
   mcp            Start the MCP stdio server (default for agent integrations).
+  dash           Open the interactive TUI dashboard (requires a terminal).
   session-start  Create a new session in the store.
   session-end    Mark a session as ended.
   context        Print a markdown context summary for a project.
@@ -134,6 +135,9 @@ Commands:
   help           Show this usage.
 
 Run "ion-mem <command> --help" for command-specific flags.
+
+When invoked with no arguments in an interactive terminal, ion-mem opens
+the dashboard automatically (equivalent to "ion-mem dash").
 `
 }
 
@@ -143,8 +147,17 @@ Run "ion-mem <command> --help" for command-specific flags.
 //
 // Returns nil on successful dispatch (or successful help/version). Returns a
 // non-nil error when the command is unknown or no command was supplied.
+//
+// When no command is supplied AND stdout is an interactive terminal, the
+// dashboard is launched instead of printing usage. On a non-TTY the historic
+// behavior is preserved (print usage + return error) so scripts and CI are
+// unaffected.
 func routeCommand(argv []string, out io.Writer) error {
 	if len(argv) < 2 {
+		// Bare invocation: launch dashboard on TTY, show usage otherwise.
+		if stdoutIsTerminal() {
+			return runDash(nil)
+		}
 		if out != nil {
 			fmt.Fprint(out, usage())
 		}
@@ -154,6 +167,8 @@ func routeCommand(argv []string, out io.Writer) error {
 	switch cmd {
 	case "mcp":
 		return runMCP(argv[2:])
+	case "dash":
+		return runDash(argv[2:])
 	case "session-start":
 		return runSessionStart(argv[2:])
 	case "session-end":

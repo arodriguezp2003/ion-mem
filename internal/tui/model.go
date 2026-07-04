@@ -91,25 +91,25 @@ func (k keyMap) FullHelp() [][]key.Binding {
 // ─── styles ───────────────────────────────────────────────────────────────────
 
 var (
-	accent    = lipgloss.Color("#7D56F4")
-	dimColor  = lipgloss.Color("#626262")
+	accent     = lipgloss.Color("#7D56F4")
+	dimColor   = lipgloss.Color("#626262")
 	alertColor = lipgloss.Color("#FF5F87")
 
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(accent)
-	dimStyle      = lipgloss.NewStyle().Foreground(dimColor)
-	badgeStyle    = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	selectedStyle  = lipgloss.NewStyle().Bold(true).Foreground(accent)
+	dimStyle       = lipgloss.NewStyle().Foreground(dimColor)
+	badgeStyle     = lipgloss.NewStyle().Foreground(accent).Bold(true)
 	statusBarStyle = lipgloss.NewStyle().Foreground(dimColor)
-	fuzzyStyle    = lipgloss.NewStyle().Foreground(alertColor).Italic(true)
-	confirmStyle  = lipgloss.NewStyle().Foreground(alertColor).Bold(true)
+	fuzzyStyle     = lipgloss.NewStyle().Foreground(alertColor).Italic(true)
+	confirmStyle   = lipgloss.NewStyle().Foreground(alertColor).Bold(true)
 )
 
 // ─── model ────────────────────────────────────────────────────────────────────
 
 // Model is the root Bubble Tea model for the ion-mem TUI dashboard.
 type Model struct {
-	store *store.Store
-	width int
+	store  *store.Store
+	width  int
 	height int
 
 	view viewState
@@ -124,10 +124,10 @@ type Model struct {
 	obsCursor       int
 
 	// Search.
-	searching   bool
-	searchQuery string
+	searching    bool
+	searchQuery  string
 	fuzzyResults bool
-	searchInput textinput.Model
+	searchInput  textinput.Model
 
 	// Detail view.
 	selectedObs *store.Observation
