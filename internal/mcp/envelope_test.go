@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/ionix/ion-mem/internal/project"
+	"github.com/ionix/ion-mem/internal/store"
 )
 
 func TestBuild_required_fields_present(t *testing.T) {
@@ -80,10 +82,106 @@ func TestBuild_no_extensions_is_valid(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("Build returned invalid JSON: %v", err)
 	}
-	if len(m) != 4 {
-		t.Errorf("expected exactly 4 keys when no extensions, got %d: %v", len(m), m)
+	// Five standard keys: project, project_source, project_path, result, status.
+	if len(m) != 5 {
+		t.Errorf("expected exactly 5 keys when no extensions, got %d: %v", len(m), m)
 	}
 }
+
+// --- Task 1.1: RED tests for status field and BuildError ---
+
+func TestBuild_StatusOk(t *testing.T) {
+	det := project.DetectionResult{Project: "p", Source: "git_root", Path: "/repo"}
+	raw := Build(det, "some result", nil)
+
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("Build returned invalid JSON: %v", err)
+	}
+	if m["status"] != "ok" {
+		t.Errorf("status = %v, want %q", m["status"], "ok")
+	}
+	if _, hasCode := m["error_code"]; hasCode {
+		t.Error("Build must not include error_code on success")
+	}
+}
+
+func TestBuild_NoExtensions_Has5Keys(t *testing.T) {
+	det := project.DetectionResult{Project: "p", Source: "src", Path: "/p"}
+	raw := Build(det, "done", nil)
+
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// Now five required keys: project, project_source, project_path, result, status.
+	if len(m) != 5 {
+		t.Errorf("expected 5 keys with no extras, got %d: %v", len(m), m)
+	}
+}
+
+var buildErrorCases = []struct {
+	name      string
+	code      string
+	result    string
+}{
+	{"not_found code", CodeNotFound, "observation 99 not found"},
+	{"db_error code", CodeDBError, "db failure"},
+	{"invalid_argument code", CodeInvalidArgument, "empty content"},
+	{"project_ambiguous code", CodeProjectAmbiguous, "ambiguous project"},
+	{"internal code", CodeInternal, "unexpected error"},
+}
+
+func TestBuildError_SetsStatusErrorAndCode(t *testing.T) {
+	det := project.DetectionResult{Project: "p", Source: "git_root", Path: "/repo"}
+
+	for _, tc := range buildErrorCases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := BuildError(det, tc.code, tc.result)
+
+			var m map[string]any
+			if err := json.Unmarshal(raw, &m); err != nil {
+				t.Fatalf("BuildError returned invalid JSON: %v", err)
+			}
+			if m["status"] != "error" {
+				t.Errorf("status = %v, want %q", m["status"], "error")
+			}
+			if m["error_code"] != tc.code {
+				t.Errorf("error_code = %v, want %q", m["error_code"], tc.code)
+			}
+			if m["result"] != tc.result {
+				t.Errorf("result = %v, want %q", m["result"], tc.result)
+			}
+			// Standard fields must still be present.
+			for _, key := range []string{"project", "project_source", "project_path"} {
+				if _, ok := m[key]; !ok {
+					t.Errorf("missing required field: %q", key)
+				}
+			}
+		})
+	}
+}
+
+func TestErrorCode_SentinelMapping(t *testing.T) {
+	cases := []struct {
+		err      error
+		wantCode string
+	}{
+		{store.ErrObservationNotFound, CodeNotFound},
+		{store.ErrNotFound, CodeNotFound},
+		{store.ErrPromptNotFound, CodeNotFound},
+		{errors.New("some random db error"), CodeDBError},
+	}
+
+	for _, tc := range cases {
+		got := errorCode(tc.err)
+		if got != tc.wantCode {
+			t.Errorf("errorCode(%v) = %q, want %q", tc.err, got, tc.wantCode)
+		}
+	}
+}
+
+// --- End Task 1.1 tests ---
 
 func TestBuild_ambiguous_project_shape(t *testing.T) {
 	det := project.DetectionResult{

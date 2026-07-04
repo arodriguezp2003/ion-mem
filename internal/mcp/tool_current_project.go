@@ -46,7 +46,7 @@ func handleCurrentProject(s *Server) toolHandler {
 					"project":            det.Project,
 					"project_source":     det.Source,
 					"project_path":       det.Path,
-					"error":              "ambiguous_project",
+					"error":              "project_ambiguous",
 					"available_projects": det.AvailableProjects,
 				}
 				raw, _ := json.Marshal(body)

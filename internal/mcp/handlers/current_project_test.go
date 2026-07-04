@@ -52,11 +52,42 @@ func TestCurrentProject_ambiguous_cwd_returns_error_in_body_not_go_error(t *test
 	if m["project"] != "" {
 		t.Errorf("ambiguous project should have empty project, got %q", m["project"])
 	}
-	if m["error"] != "ambiguous_project" {
-		t.Errorf("error = %q, want %q", m["error"], "ambiguous_project")
+	if m["error"] != "project_ambiguous" {
+		t.Errorf("error = %q, want %q", m["error"], "project_ambiguous")
 	}
 	if _, ok := m["available_projects"]; !ok {
 		t.Error("available_projects missing from ambiguous response")
+	}
+}
+
+// TestCurrentProject_AmbiguousErrorValue asserts the aligned vocabulary value
+// "project_ambiguous" (not the pre-change "ambiguous_project").
+// This test drives task 1.3/1.4: RED here, GREEN after renaming the literal.
+func TestCurrentProject_AmbiguousErrorValue(t *testing.T) {
+	st := mustStore(t)
+	det := project.DetectionResult{
+		Project:           "",
+		Source:            "ambiguous",
+		Path:              "/workspace",
+		AvailableProjects: []string{"alpha", "beta"},
+	}
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return det, project.ErrAmbiguousProject
+	}))
+
+	res := callTool(t, ts, "ion_current_project", map[string]any{})
+	m := decodeText(t, res)
+
+	// R-ENV-03 / R-TOOL-CURRENT-03: error value must be "project_ambiguous".
+	if m["error"] != "project_ambiguous" {
+		t.Errorf("error = %q, want %q", m["error"], "project_ambiguous")
+	}
+	// Flat shape: no status, no error_code, no result envelope fields.
+	if _, ok := m["status"]; ok {
+		t.Error("ion_current_project must not include 'status' envelope field")
+	}
+	if _, ok := m["error_code"]; ok {
+		t.Error("ion_current_project must not include 'error_code' envelope field")
 	}
 }
 
