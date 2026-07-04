@@ -3,17 +3,18 @@ package mcp
 import (
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ionix/ion-mem/internal/project"
 )
 
 // makeDetectFunc returns a detect function that records call count and
-// always returns the given result/error.
-func makeDetectFunc(result project.DetectionResult, err error) (func(string) (project.DetectionResult, error), *int) {
-	count := 0
+// always returns the given result/error. The counter is safe for concurrent use.
+func makeDetectFunc(result project.DetectionResult, err error) (func(string) (project.DetectionResult, error), *atomic.Int32) {
+	var count atomic.Int32
 	fn := func(_ string) (project.DetectionResult, error) {
-		count++
+		count.Add(1)
 		return result, err
 	}
 	return fn, &count
@@ -72,8 +73,8 @@ func TestResolveProject_default_proj_cached_for_process_lifetime(t *testing.T) {
 	}
 
 	// detect should have been called only once — result is cached.
-	if *count != 1 {
-		t.Errorf("detect called %d times, want exactly 1 (caching)", *count)
+	if count.Load() != 1 {
+		t.Errorf("detect called %d times, want exactly 1 (caching)", count.Load())
 	}
 }
 

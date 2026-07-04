@@ -61,7 +61,7 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 |----|-------------|
 | R-TOOL-CURRENT-01 | `ion_current_project` MUST accept one optional input: `cwd?: string`. |
 | R-TOOL-CURRENT-02 | `ion_current_project` MUST return the `DetectionResult` shape DIRECTLY, NOT wrapped in the standard envelope. Required output fields: `project`, `project_source`, `project_path`, `available_projects` (null when unambiguous), `warning` (empty string when absent). |
-| R-TOOL-CURRENT-03 | `ion_current_project` MUST NEVER return a Go-level error. When `ErrAmbiguousProject` fires, it MUST surface as `project: ""`, `project_source: ""`, `project_path: <cwd>`, `error: "ambiguous_project"`, `available_projects: ["a","b"]` within the response body. |
+| R-TOOL-CURRENT-03 | `ion_current_project` MUST NEVER return a Go-level error. When `ErrAmbiguousProject` fires, it MUST surface as `project: ""`, `project_source: ""`, `project_path: <cwd>`, `error: "project_ambiguous"`, `available_projects: ["a","b"]` within the response body. |
 | R-TOOL-CURRENT-04 | `ion_current_project` MUST NOT attach the standard envelope fields (`result`, `project_source` in the envelope sense). It is the sole exception to the envelope rule. |
 
 #### ion_save
@@ -111,7 +111,7 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 **S1-T-CURRENT-02 — ambiguous: two git children**
 - GIVEN cwd is a parent directory of two git repos
 - WHEN client calls `ion_current_project`
-- THEN response is `{project: "", project_source: "", project_path: <cwd>, error: "ambiguous_project", available_projects: ["a","b"]}`
+- THEN response is `{project: "", project_source: "", project_path: <cwd>, error: "project_ambiguous", available_projects: ["a","b"]}`
 - AND NO Go-level error is returned by the handler
 
 **S1-T-CURRENT-03 — cwd override via argument**
@@ -539,7 +539,7 @@ The following per-tool rules are stated explicitly because apply has historicall
 
 | Tool | Behavior on error condition | MUST NOT do |
 |------|----------------------------|-------------|
-| `ion_current_project` | Ambiguous project → return structured body with `error: "ambiguous_project"`. Any other detection error → return with `project: ""`, describe error in `warning` field. | Return Go error. Panic. Return empty struct. |
+| `ion_current_project` | Ambiguous project → return structured body with `error: "project_ambiguous"`. Any other detection error → return with `project: ""`, describe error in `warning` field. | Return Go error. Panic. Return empty struct. |
 | `ion_save` | Unknown session_id → call `ensureSession` (auto-creates). Dedup collision → return existing observation envelope, increment `duplicate_count`. | Silently insert duplicate. Return nil id. |
 | `ion_search` | Zero results → return `results: []`, `count: 0`. FTS5 syntax error → return envelope with error in `result`. | Return Go error for empty results. Return null for `results`. |
 | `ion_get_observation` | Missing id → envelope with error in `result`. | Return Go error. Panic. |

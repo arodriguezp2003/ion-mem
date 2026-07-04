@@ -14,7 +14,7 @@ import (
 //
 // ion_current_project is the SOLE exception to the envelope rule: it returns
 // a DetectionResult directly (no project/project_source/project_path/result wrapper).
-// Ambiguity surfaces as error:"ambiguous_project" + available_projects in the body.
+// Ambiguity surfaces as error:"project_ambiguous" + available_projects in the body.
 // It NEVER returns a Go error.
 func buildCurrentProjectTool(s *Server) mcpserver.ServerTool {
 	tool := mcplib.NewTool("ion_current_project",
