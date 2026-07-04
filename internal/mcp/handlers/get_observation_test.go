@@ -60,3 +60,43 @@ func TestGetObservation_missing_id_returns_envelope_error_not_go_error(t *testin
 		t.Errorf("ion_get_observation: result %q should contain 'not found'", result)
 	}
 }
+
+func TestGetObservation_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	sess, _ := st.CreateSession(ctx, store.CreateSessionParams{ID: "sess-status-ok", Project: "myproj"})
+	obs, _ := st.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sess.ID, Type: "manual", Title: "Status Test", Content: "c", Project: "myproj", Scope: "project",
+	})
+
+	res := callTool(t, ts, "ion_get_observation", map[string]any{"id": obs.ID})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q on success", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
+func TestGetObservation_StatusErrorNotFound(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	res := callTool(t, ts, "ion_get_observation", map[string]any{"id": int64(99999)})
+	env := decodeText(t, res)
+
+	if env["status"] != "error" {
+		t.Errorf("status = %v, want %q for not-found", env["status"], "error")
+	}
+	if env["error_code"] != "not_found" {
+		t.Errorf("error_code = %v, want %q", env["error_code"], "not_found")
+	}
+}

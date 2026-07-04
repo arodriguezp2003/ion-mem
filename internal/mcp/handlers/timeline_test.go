@@ -75,6 +75,51 @@ func TestIonTimeline_WindowEntries(t *testing.T) {
 	}
 }
 
+// TestIonTimeline_StatusOkOnSuccess verifies status:"ok" on successful timeline fetch.
+func TestIonTimeline_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	sid := seedSession(t, st)
+
+	obs, err := st.AddObservation(context.Background(), store.AddObservationParams{
+		SessionID: sid, Type: "manual", Title: "T", Content: "c", Project: "ion-mem", Scope: "project",
+	})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, ts := mustTestServer(t, st, fakeProject("ion-mem"))
+
+	res := callTool(t, ts, "ion_timeline", map[string]any{
+		"observation_id": float64(obs.ID),
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
+// TestIonTimeline_StatusErrorNotFound verifies status:"error" + not_found on missing anchor.
+func TestIonTimeline_StatusErrorNotFound(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, fakeProject("ion-mem"))
+
+	res := callTool(t, ts, "ion_timeline", map[string]any{
+		"observation_id": float64(999999),
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "error" {
+		t.Errorf("status = %v, want %q", env["status"], "error")
+	}
+	if env["error_code"] != "not_found" {
+		t.Errorf("error_code = %v, want %q", env["error_code"], "not_found")
+	}
+}
+
 // TestIonTimeline_EmptyBeforeAfterAreArrays verifies that when the anchor is
 // the first observation (no entries before it), the entries slice is still
 // a JSON array [] not null.

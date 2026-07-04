@@ -31,6 +31,26 @@ func TestSave_round_trip_stores_observation(t *testing.T) {
 	}
 }
 
+func TestSave_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	res := callTool(t, ts, "ion_save", map[string]any{
+		"title":   "status ok test",
+		"content": "content",
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
 func TestSave_with_buffered_prompt_attaches_it(t *testing.T) {
 	st := mustStore(t)
 	ionSrv, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {

@@ -30,7 +30,11 @@ func handleContext(s *Server) toolHandler {
 
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
-			raw := Build(det, "error resolving project: "+err.Error(), nil)
+			code := CodeProjectAmbiguous
+			if !isAmbiguousProjectError(err) {
+				code = CodeInternal
+			}
+			raw := BuildError(det, code, "error resolving project: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -41,7 +45,7 @@ func handleContext(s *Server) toolHandler {
 		// Gather recent sessions.
 		sessions, err := s.store.RecentSessions(ctx, det.Project, limit)
 		if err != nil {
-			raw := Build(det, "error fetching sessions: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error fetching sessions: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -51,7 +55,7 @@ func handleContext(s *Server) toolHandler {
 			Limit:   limit,
 		})
 		if err != nil {
-			raw := Build(det, "error fetching observations: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error fetching observations: "+err.Error())
 			return textResult(raw), nil
 		}
 

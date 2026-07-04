@@ -121,9 +121,9 @@ func TestBuild_NoExtensions_Has5Keys(t *testing.T) {
 }
 
 var buildErrorCases = []struct {
-	name      string
-	code      string
-	result    string
+	name   string
+	code   string
+	result string
 }{
 	{"not_found code", CodeNotFound, "observation 99 not found"},
 	{"db_error code", CodeDBError, "db failure"},

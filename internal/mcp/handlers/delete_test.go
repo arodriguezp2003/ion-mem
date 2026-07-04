@@ -2,7 +2,45 @@ package handlers_test
 
 import (
 	"testing"
+
+	"github.com/ionix/ion-mem/internal/mcp"
+	"github.com/ionix/ion-mem/internal/project"
 )
+
+// TestIonDelete_StatusOkOnSuccess verifies status:"ok" on successful delete.
+func TestIonDelete_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	obs := seedObservation(t, st, "ion-mem", "Delete Status Target", "content", "manual")
+	_, ts := mustTestServer(t, st, fakeProject("ion-mem"))
+
+	res := callTool(t, ts, "ion_delete", map[string]any{"id": float64(obs.ID)})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
+// TestIonDelete_StatusErrorNotFound verifies status:"error" + not_found on missing id.
+func TestIonDelete_StatusErrorNotFound(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "ion-mem", Source: "git_root", Path: "/fake/ion-mem"}, nil
+	}))
+
+	res := callTool(t, ts, "ion_delete", map[string]any{"id": float64(999999)})
+	env := decodeText(t, res)
+
+	if env["status"] != "error" {
+		t.Errorf("status = %v, want %q", env["status"], "error")
+	}
+	if env["error_code"] != "not_found" {
+		t.Errorf("error_code = %v, want %q", env["error_code"], "not_found")
+	}
+}
 
 // TestIonDelete_SoftDeleteHidesFromSearch verifies that soft-deleting an observation
 // causes subsequent ion_search calls to exclude it.

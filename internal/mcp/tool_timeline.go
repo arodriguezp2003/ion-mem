@@ -35,7 +35,7 @@ func handleTimeline(s *Server) toolHandler {
 			if !errors.Is(err, store.ErrObservationNotFound) {
 				msg = "error fetching timeline: " + err.Error()
 			}
-			raw := Build(det, msg, nil)
+			raw := BuildError(det, errorCode(err), msg)
 			return textResult(raw), nil
 		}
 

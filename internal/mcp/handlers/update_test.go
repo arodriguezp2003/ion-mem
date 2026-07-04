@@ -94,6 +94,45 @@ func TestIonUpdate_PatchPreservesUnchangedFields(t *testing.T) {
 	}
 }
 
+// TestIonUpdate_StatusOkOnSuccess verifies status:"ok" on successful update.
+func TestIonUpdate_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	orig := seedObservation(t, st, "ion-mem", "Status OK Title", "Content", "manual")
+	_, ts := mustTestServer(t, st, fakeProject("ion-mem"))
+
+	res := callTool(t, ts, "ion_update", map[string]any{
+		"id":    float64(orig.ID),
+		"title": "Updated",
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
+// TestIonUpdate_StatusErrorNotFound verifies status:"error" + not_found on missing id.
+func TestIonUpdate_StatusErrorNotFound(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, fakeProject("ion-mem"))
+
+	res := callTool(t, ts, "ion_update", map[string]any{
+		"id":    float64(999999),
+		"title": "Anything",
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "error" {
+		t.Errorf("status = %v, want %q", env["status"], "error")
+	}
+	if env["error_code"] != "not_found" {
+		t.Errorf("error_code = %v, want %q", env["error_code"], "not_found")
+	}
+}
+
 // TestIonUpdate_MissingIdEnvelopeError verifies that a missing ID produces
 // an error message in result, never a Go error.
 func TestIonUpdate_MissingIdEnvelopeError(t *testing.T) {

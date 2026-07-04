@@ -41,14 +41,18 @@ func handleSave(s *Server) toolHandler {
 		// Resolve project.
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
-			raw := Build(det, "error resolving project: "+err.Error(), nil)
+			code := CodeProjectAmbiguous
+			if !isAmbiguousProjectError(err) {
+				code = CodeInternal
+			}
+			raw := BuildError(det, code, "error resolving project: "+err.Error())
 			return textResult(raw), nil
 		}
 
 		// Ensure session exists (auto-create if unknown).
 		sessionID, err := s.ensureSession(ctx, det.Project, sessionIDArg)
 		if err != nil {
-			raw := Build(det, "error ensuring session: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error ensuring session: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -77,7 +81,7 @@ func handleSave(s *Server) toolHandler {
 			TopicKey:  topicKey,
 		})
 		if err != nil {
-			raw := Build(det, "error saving observation: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error saving observation: "+err.Error())
 			return textResult(raw), nil
 		}
 

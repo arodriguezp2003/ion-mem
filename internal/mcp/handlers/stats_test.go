@@ -8,6 +8,22 @@ import (
 	"github.com/ionix/ion-mem/internal/store"
 )
 
+// TestIonStats_StatusOkOnSuccess verifies status:"ok" on successful stats fetch.
+func TestIonStats_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, fakeProject("ion-mem"))
+
+	res := callTool(t, ts, "ion_stats", map[string]any{})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
 // TestIonStats_ReflectsCurrentState verifies that ion_stats returns counts
 // matching the store state: 2 sessions, 5 observations, 1 prompt.
 func TestIonStats_ReflectsCurrentState(t *testing.T) {

@@ -46,6 +46,23 @@ func TestSearch_ranked_results_for_matching_query(t *testing.T) {
 	}
 }
 
+func TestSearch_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	res := callTool(t, ts, "ion_search", map[string]any{"query": "something"})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
 func TestSearch_empty_store_returns_empty_array_not_error(t *testing.T) {
 	st := mustStore(t)
 	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {

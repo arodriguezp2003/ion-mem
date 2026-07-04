@@ -32,7 +32,7 @@ func handleGetObservation(s *Server) toolHandler {
 			if !errors.Is(err, store.ErrObservationNotFound) {
 				msg = "error fetching observation: " + err.Error()
 			}
-			raw := Build(det, msg, nil)
+			raw := BuildError(det, errorCode(err), msg)
 			return textResult(raw), nil
 		}
 

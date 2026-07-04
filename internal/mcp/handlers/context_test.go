@@ -56,6 +56,23 @@ func TestContext_empty_store_returns_valid_empty_markdown_not_error(t *testing.T
 	}
 }
 
+func TestContext_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	res := callTool(t, ts, "ion_context", map[string]any{})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
 func TestContext_result_contains_section_headers(t *testing.T) {
 	st := mustStore(t)
 	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {

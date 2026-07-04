@@ -1,10 +1,17 @@
 package mcp
 
 import (
+	"errors"
 	"os"
 
 	"github.com/ionix/ion-mem/internal/project"
 )
+
+// isAmbiguousProjectError reports whether err wraps project.ErrAmbiguousProject.
+// Used by handlers to choose project_ambiguous vs internal as the error_code.
+func isAmbiguousProjectError(err error) bool {
+	return errors.Is(err, project.ErrAmbiguousProject)
+}
 
 // configuredDefaultProject reads ION_MEM_PROJECT from the environment.
 // This is the SINGLE callsite that may call os.Getenv — R-CC-04, R-S1-PROJ-03.

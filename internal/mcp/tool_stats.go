@@ -22,7 +22,7 @@ func handleStats(s *Server) toolHandler {
 
 		stats, err := s.store.Stats(ctx)
 		if err != nil {
-			raw := Build(det, "error fetching stats: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error fetching stats: "+err.Error())
 			return textResult(raw), nil
 		}
 

@@ -34,7 +34,7 @@ func handleDelete(s *Server) toolHandler {
 			if !errors.Is(err, store.ErrObservationNotFound) {
 				msg = "error deleting observation: " + err.Error()
 			}
-			raw := Build(det, msg, nil)
+			raw := BuildError(det, errorCode(err), msg)
 			return textResult(raw), nil
 		}
 

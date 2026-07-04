@@ -32,7 +32,11 @@ func handleSessionStart(s *Server) toolHandler {
 
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
-			raw := Build(det, "error resolving project: "+err.Error(), nil)
+			code := CodeProjectAmbiguous
+			if !isAmbiguousProjectError(err) {
+				code = CodeInternal
+			}
+			raw := BuildError(det, code, "error resolving project: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -47,7 +51,7 @@ func handleSessionStart(s *Server) toolHandler {
 			if isAlreadyExistsError(err) {
 				created = false
 			} else {
-				raw := Build(det, "error creating session: "+err.Error(), nil)
+				raw := BuildError(det, CodeDBError, "error creating session: "+err.Error())
 				return textResult(raw), nil
 			}
 		}
@@ -80,11 +84,11 @@ func handleSessionEnd(s *Server) toolHandler {
 
 		err := s.store.EndSession(ctx, sessionID, summary)
 		if err != nil {
-			msg := "error ending session: " + err.Error()
 			if errors.Is(err, store.ErrNotFound) {
-				msg = fmt.Sprintf("session %q not found", sessionID)
+				raw := BuildError(det, CodeNotFound, fmt.Sprintf("session %q not found", sessionID))
+				return textResult(raw), nil
 			}
-			raw := Build(det, msg, nil)
+			raw := BuildError(det, CodeDBError, "error ending session: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -127,14 +131,18 @@ func handleSessionSummary(s *Server) toolHandler {
 
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
-			raw := Build(det, "error resolving project: "+err.Error(), nil)
+			code := CodeProjectAmbiguous
+			if !isAmbiguousProjectError(err) {
+				code = CodeInternal
+			}
+			raw := BuildError(det, code, "error resolving project: "+err.Error())
 			return textResult(raw), nil
 		}
 
 		// Ensure session (auto-create if session_id absent).
 		sessionID, err := s.ensureSession(ctx, det.Project, sessionIDArg)
 		if err != nil {
-			raw := Build(det, "error ensuring session: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error ensuring session: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -149,7 +157,7 @@ func handleSessionSummary(s *Server) toolHandler {
 			TopicKey:  topicKey,
 		})
 		if err != nil {
-			raw := Build(det, "error saving summary: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error saving summary: "+err.Error())
 			return textResult(raw), nil
 		}
 

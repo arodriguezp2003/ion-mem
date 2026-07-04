@@ -10,11 +10,11 @@ import (
 
 // Closed vocabulary for the error_code field in error envelopes.
 const (
-	CodeNotFound        = "not_found"
-	CodeDBError         = "db_error"
-	CodeInvalidArgument = "invalid_argument"
+	CodeNotFound         = "not_found"
+	CodeDBError          = "db_error"
+	CodeInvalidArgument  = "invalid_argument"
 	CodeProjectAmbiguous = "project_ambiguous"
-	CodeInternal        = "internal"
+	CodeInternal         = "internal"
 )
 
 // Build constructs the canonical JSON envelope for every MCP tool response

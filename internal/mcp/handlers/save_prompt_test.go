@@ -98,6 +98,49 @@ func TestSavePromptTwiceThenSave_only_latest_prompt_attached(t *testing.T) {
 	}
 }
 
+func TestSavePrompt_StatusOkOnSuccess(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{ID: "sp-status-ok", Project: "myproj"})
+
+	res := callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": "sp-status-ok",
+		"content":    "a real prompt",
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q on success", env["status"], "ok")
+	}
+	if _, hasCode := env["error_code"]; hasCode {
+		t.Error("success envelope must not contain error_code")
+	}
+}
+
+func TestSavePrompt_EmptyContent_InvalidArgument(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	res := callTool(t, ts, "ion_save_prompt", map[string]any{
+		"content": "",
+	})
+	env := decodeText(t, res)
+
+	// R-ENV-02: empty content → invalid_argument
+	if env["status"] != "error" {
+		t.Errorf("status = %v, want %q for empty content", env["status"], "error")
+	}
+	if env["error_code"] != "invalid_argument" {
+		t.Errorf("error_code = %v, want %q", env["error_code"], "invalid_argument")
+	}
+}
+
 func TestSavePrompt_empty_content_does_not_overwrite_buffer(t *testing.T) {
 	st := mustStore(t)
 	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {

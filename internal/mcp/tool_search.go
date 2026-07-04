@@ -37,7 +37,11 @@ func handleSearch(s *Server) toolHandler {
 		// Resolve project (ignored when all_projects=true or project param supplied).
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
-			raw := Build(det, "error resolving project: "+err.Error(), nil)
+			code := CodeProjectAmbiguous
+			if !isAmbiguousProjectError(err) {
+				code = CodeInternal
+			}
+			raw := BuildError(det, code, "error resolving project: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -54,10 +58,7 @@ func handleSearch(s *Server) toolHandler {
 
 		results, err := s.store.Search(ctx, params)
 		if err != nil {
-			raw := Build(det, "search error: "+err.Error(), map[string]any{
-				"results": []any{},
-				"count":   0,
-			})
+			raw := BuildError(det, CodeDBError, "search error: "+err.Error())
 			return textResult(raw), nil
 		}
 

@@ -32,20 +32,24 @@ func handleSavePrompt(s *Server) toolHandler {
 		// Empty content MUST NOT overwrite buffer; return error in result.
 		if content == "" {
 			det, _ := s.resolveProject(projectArg, cwdArg)
-			raw := Build(det, "empty content: prompt not saved", nil)
+			raw := BuildError(det, CodeInvalidArgument, "empty content: prompt not saved")
 			return textResult(raw), nil
 		}
 
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
-			raw := Build(det, "error resolving project: "+err.Error(), nil)
+			code := CodeProjectAmbiguous
+			if !isAmbiguousProjectError(err) {
+				code = CodeInternal
+			}
+			raw := BuildError(det, code, "error resolving project: "+err.Error())
 			return textResult(raw), nil
 		}
 
 		// Ensure session.
 		sessionID, err := s.ensureSession(ctx, det.Project, sessionIDArg)
 		if err != nil {
-			raw := Build(det, "error ensuring session: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error ensuring session: "+err.Error())
 			return textResult(raw), nil
 		}
 
@@ -56,7 +60,7 @@ func handleSavePrompt(s *Server) toolHandler {
 			Project:   det.Project,
 		})
 		if err != nil {
-			raw := Build(det, "error saving prompt: "+err.Error(), nil)
+			raw := BuildError(det, CodeDBError, "error saving prompt: "+err.Error())
 			return textResult(raw), nil
 		}
 
