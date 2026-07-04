@@ -2,6 +2,7 @@
 
 **Status**: Active
 **Shipped**: 2026-06-07 via SDD change mcp-mvp (3 stacked PRs: 3cdea8d + 6f10d34 + 6b35314)
+**Last Updated**: 2026-07-04 via SDD change envelope-status-durable-prompts (envelope + durable prompt capture)
 **Tools**: 14 ion_* registered under "agent" profile
 **Tests**: 69 functions passing at 78.6% cross-package coverage
 
@@ -50,8 +51,11 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 
 | ID | Requirement |
 |----|-------------|
-| R-S1-ENV-01 | `envelope.Build(det project.DetectionResult, msg string, extras map[string]any) []byte` MUST be the sole entry point for producing envelope JSON. Handlers MUST NOT hand-roll JSON marshaling. |
-| R-S1-ENV-02 | Every envelope response MUST contain exactly these four top-level keys: `project` (string), `project_source` (string), `project_path` (string), `result` (string). |
+| R-ENV-01 | Every envelope response MUST include a top-level `status` field with value `"ok"` or `"error"`. `envelope.Build` MUST default `status` to `"ok"`. |
+| R-ENV-02 | `envelope.BuildError(det, error_code, msg string) []byte` MUST exist as a dedicated constructor for error responses. It MUST set `status: "error"`, `error_code` to one of the closed vocabulary values, and `result` to the human-readable `msg`. The `error_code` vocabulary is closed: `not_found`, `db_error`, `invalid_argument`, `project_ambiguous`, `internal`. |
+| R-ENV-03 | `ion_current_project` MUST continue to use its own flat response shape (not the standard envelope). When returning an ambiguous-project condition, the `error` field value MUST be `"project_ambiguous"` (aligned with the shared `error_code` vocabulary). No other `ion_current_project` response fields are changed by this change. |
+| R-S1-ENV-01 | `envelope.Build(det project.DetectionResult, msg string, extras map[string]any) []byte` MUST be the sole entry point for producing SUCCESS envelope JSON. For error responses, handlers MUST use `envelope.BuildError`. Handlers MUST NOT hand-roll JSON marshaling. |
+| R-S1-ENV-02 | Every envelope response MUST contain exactly these five top-level keys: `project` (string), `project_source` (string), `project_path` (string), `result` (string), `status` (`"ok"` or `"error"`). Error envelopes MUST additionally contain `error_code` (string, one of the closed vocabulary values). |
 | R-S1-ENV-03 | Per-tool extension fields (e.g., `id`, `sync_id`) MUST be merged at the top level of the same object, NOT nested under a `"data"` key or any other wrapper. |
 | R-S1-ENV-04 | When `project.ErrAmbiguousProject` fires in any tool other than `ion_current_project`, the envelope MUST have `project: ""`, `project_source: "ambiguous"`, `result: "ambiguous project — call ion_current_project"`, and `available_projects: [...]` appended as an extension field. |
 
@@ -61,7 +65,7 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 |----|-------------|
 | R-TOOL-CURRENT-01 | `ion_current_project` MUST accept one optional input: `cwd?: string`. |
 | R-TOOL-CURRENT-02 | `ion_current_project` MUST return the `DetectionResult` shape DIRECTLY, NOT wrapped in the standard envelope. Required output fields: `project`, `project_source`, `project_path`, `available_projects` (null when unambiguous), `warning` (empty string when absent). |
-| R-TOOL-CURRENT-03 | `ion_current_project` MUST NEVER return a Go-level error. When `ErrAmbiguousProject` fires, it MUST surface as `project: ""`, `project_source: ""`, `project_path: <cwd>`, `error: "project_ambiguous"`, `available_projects: ["a","b"]` within the response body. |
+| R-TOOL-CURRENT-03 | `ion_current_project` MUST NEVER return a Go-level error. When `ErrAmbiguousProject` fires, it MUST surface as `project: ""`, `project_source: ""`, `project_path: <cwd>`, `error: "project_ambiguous"`, `available_projects: ["a","b"]` within the response body. (Updated to align `error` field value to `"project_ambiguous"` for vocabulary consistency.) |
 | R-TOOL-CURRENT-04 | `ion_current_project` MUST NOT attach the standard envelope fields (`result`, `project_source` in the envelope sense). It is the sole exception to the envelope rule. |
 
 #### ion_save
@@ -71,7 +75,7 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 | R-TOOL-SAVE-01 | `ion_save` MUST accept: `title: string (req)`, `content: string`, `type?: string = "manual"`, `project?: string`, `scope?: string = "project"`, `topic_key?: string`, `session_id?: string`, `capture_prompt?: bool = true`, `cwd?: string`. |
 | R-TOOL-SAVE-02 | `ion_save` MUST return envelope with extensions: `id: int64`, `sync_id: string`, `revision_count: int`, `duplicate_count: int`, `prompt_attached: bool`. |
 | R-TOOL-SAVE-03 | `ion_save` MUST use the cached/resolved project unless the `project` param is supplied; when `project` is supplied it MUST override the cached project and `envelope.project` MUST reflect the override. |
-| R-TOOL-SAVE-04 | `ion_save` with `capture_prompt: true` (default) MUST attach the buffered last prompt for that session to the observation if the buffer is non-empty. `prompt_attached` MUST be `true` when attachment occurs, `false` otherwise. |
+| R-TOOL-SAVE-04 | `ion_save` with `capture_prompt: true` (default) MUST, within a single transaction, SELECT the latest unconsumed `user_prompts` row for the session (`consumed_at IS NULL ORDER BY created_at DESC LIMIT 1`) and UPDATE that row's `consumed_at` to the current UTC time. `prompt_attached` MUST be `true` when a row is consumed, `false` when no unconsumed row exists. The in-memory buffer (previously used) MUST NOT be consulted for prompt capture. |
 | R-TOOL-SAVE-05 | `ion_save` MUST delegate to `store.AddObservation`; dedup, topic_key upsert, and soft-delete semantics are inherited from the store layer without reimplementation. |
 | R-TOOL-SAVE-06 | `ion_save` on a dedup hash collision (same content, same session) MUST return the existing observation's envelope (not error, not silent new insert). `duplicate_count` MUST be incremented. |
 | R-TOOL-SAVE-07 | `ion_save` with an unknown `session_id` argument MUST call `ensureSession` which auto-creates a session. It MUST NOT silently fall through to a nil session. |
@@ -265,9 +269,8 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 | ID | Requirement |
 |----|-------------|
 | R-S2-SP-01 | `ion_save_prompt` MUST accept: `content: string (req)`, `session_id?: string`, `project?: string`, `cwd?: string`. |
-| R-S2-SP-02 | `ion_save_prompt` MUST call `store.AddPromptIfMissing` AND overwrite the in-memory single-slot buffer for the session (`Server.recordPrompt`). |
+| R-S2-SP-02 | `ion_save_prompt` MUST call `store.AddPromptIfMissing` to persist the prompt row. It MUST NOT write to any in-memory buffer. The tool response remains unchanged. |
 | R-S2-SP-03 | `ion_save_prompt` MUST return envelope with extensions: `id: int64`, `sync_id: string`, `session_id: string`. |
-| R-S2-SP-04 | Multiple successive `ion_save_prompt` calls in the same session MUST keep only the LATEST prompt in the single-slot buffer. |
 
 #### ion_suggest_topic_key
 
@@ -289,8 +292,8 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 
 | ID | Requirement |
 |----|-------------|
-| R-S2-SESSION-01 | `ion_save_prompt` followed by `ion_save` (with `capture_prompt: true`) within the same MCP process and session MUST result in the observation having the prompt attached. |
-| R-S2-SESSION-02 | Two successive `ion_save_prompt` calls followed by `ion_save` MUST attach only the second (latest) prompt — the single-slot buffer rule. |
+| R-S2-SESSION-01 | `ion_save_prompt` followed by `ion_save` (with `capture_prompt: true`) within the same MCP session MUST result in the `user_prompts` row being consumed (`consumed_at` set) and `prompt_attached: true`. This guarantee survives process restarts between the two calls. |
+| R-S2-SESSION-02 | A repeated identical `ion_save_prompt` call (same `session_id` and `content`) hits the existing row via `(session_id, content)` dedup. If that row is already consumed (`consumed_at IS NOT NULL`), a subsequent `ion_save` MUST NOT re-consume it. A new distinct prompt (different `content`) creates a new row and is available for consumption independently. |
 
 ### 3.2 Scenarios (Slice 2)
 
@@ -361,20 +364,22 @@ the same behavioral shape as upstream engram but under the Ionix `ion_*` identit
 
 #### ion_save_prompt
 
-**S2-T-SP-01 — prompt buffer filled and observation prompt attached**
-- GIVEN no prior prompt buffered
-- WHEN client calls `ion_save_prompt` with `content: "User asked X"`, then `ion_save` with default `capture_prompt`
-- THEN saved observation has prompt attached; `prompt_attached: true` in `ion_save` response
+**S2-T-SP-01 — prompt written to DB and consumed by ion_save**
+- GIVEN no prior prompt for this session
+- WHEN client calls `ion_save_prompt` with `content: "User asked X"`, then `ion_save` with default `capture_prompt: true`
+- THEN the `user_prompts` row has `consumed_at` set to a non-null timestamp
+- AND `prompt_attached: true` in `ion_save` response
 
-**S2-T-SP-02 — only latest prompt attached (single-slot)**
-- GIVEN client calls `ion_save_prompt` twice: "First prompt" then "Second prompt"
+**S2-T-SP-02 — latest unconsumed prompt consumed by ion_save**
+- GIVEN client calls `ion_save_prompt` twice: "First prompt" then "Second prompt" (both unconsumed)
 - WHEN client calls `ion_save` with `capture_prompt: true`
-- THEN observation is linked to "Second prompt" only
+- THEN the "Second prompt" row (latest unconsumed) is consumed
+- AND `prompt_attached: true`
 
 **S2-T-SP-03 — empty content not stored**
 - GIVEN client calls `ion_save_prompt` with `content: ""`
 - WHEN the call completes
-- THEN the buffer MUST NOT be overwritten with empty string
+- THEN `result` contains an error description
 - AND subsequent `ion_save` has `prompt_attached: false`
 
 #### ion_suggest_topic_key

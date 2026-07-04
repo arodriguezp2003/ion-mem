@@ -4,6 +4,7 @@
 **Package**: `internal/store`
 **Status**: Active
 **Shipped**: 2026-06-06 via SDD change local-store-mvp (5 commits, ~3500 lines)
+**Last Updated**: 2026-07-04 via SDD change envelope-status-durable-prompts (migration 0004, ConsumeLatestPrompt, S3-R01/R05 corrections)
 
 ---
 
@@ -16,14 +17,15 @@
 sessions group observations and prompts chronologically; observations carry
 type, title, content, and optional tool attribution with content-hash
 deduplication and topic-key upsert semantics; user prompts are stored
-with session-scoped deduplication. Every read operation excludes
-soft-deleted rows by default. Full-text search uses FTS5 BM25 ranking with
-`unicode61 remove_diacritics 2` tokenization. The store is local-first: a
-single embedded SQLite file (`ion-mem.db`) owned by the user, opened via
-`Open(dataDir string) (*Store, error)`, and closed via `(*Store).Close()`.
-No network dependency exists in this layer. The schema is versioned via a
-`schema_version` table and applied via linear Go migration functions — one
-per slice — on every `Open` call (idempotent).
+with session-scoped deduplication and durable fetch-and-consume semantics
+(migration 0004 adds `consumed_at` and `ConsumeLatestPrompt`). Every read
+operation excludes soft-deleted rows by default. Full-text search uses FTS5
+BM25 ranking with `unicode61 remove_diacritics 2` tokenization. The store
+is local-first: a single embedded SQLite file (`ion-mem.db`) owned by the
+user, opened via `Open(dataDir string) (*Store, error)`, and closed via
+`(*Store).Close()`. No network dependency exists in this layer. The schema
+is versioned via a `schema_version` table and applied via linear Go
+migration functions — one per slice — on every `Open` call (idempotent).
 
 ---
 
@@ -389,11 +391,11 @@ Then   errors.Is(err, store.ErrSessionHasObservations) is true
 
 | # | Verb | Requirement |
 |---|------|-------------|
-| S3-R01 | MUST | Migration 0003 creates `user_prompts` table with columns: `id INTEGER PRIMARY KEY AUTOINCREMENT`, `sync_id TEXT NOT NULL UNIQUE`, `session_id TEXT NOT NULL REFERENCES sessions(id)`, `content TEXT NOT NULL`, `project TEXT NOT NULL`, `created_at TEXT NOT NULL`. |
+| S3-R01 | MUST | Migration 0003 creates `user_prompts` table with columns: `id INTEGER PRIMARY KEY AUTOINCREMENT`, `sync_id TEXT NOT NULL UNIQUE`, `session_id TEXT NOT NULL REFERENCES sessions(id)`, `content TEXT NOT NULL`, `project TEXT NOT NULL`, `created_at TEXT NOT NULL`. Migration 0004 (added 2026-07-04 via change `envelope-status-durable-prompts`) adds a nullable `consumed_at TEXT DEFAULT NULL` column to this table; historical rows receive `consumed_at = NULL` with no backfill. |
 | S3-R02 | MUST | Migration 0003 creates `prompts_fts` as a FTS5 content table over `user_prompts` with columns `content, project`, `content_rowid='id'`, `tokenize='unicode61 remove_diacritics 2'`. |
 | S3-R03 | MUST | Migration 0003 creates three FTS5 sync triggers on `user_prompts`: `AFTER INSERT`, `AFTER DELETE`, `AFTER UPDATE`. |
 | S3-R04 | MUST | Migration 0003 creates indexes: `idx_prompts_session(session_id)`, `idx_prompts_project(project)`, `idx_prompts_created(created_at DESC)`. |
-| S3-R05 | MUST | `AddPromptIfMissing(ctx context.Context, params AddPromptParams) (Prompt, error)` deduplicates by SHA-256 of `(content + session_id)`. If an existing row matches the same session and content hash, return it without inserting. Otherwise INSERT a new row. `sync_id` prefix is `"pr-"`. |
+| S3-R05 | MUST | `AddPromptIfMissing(ctx context.Context, params AddPromptParams) (Prompt, error)` deduplicates by direct `(session_id, content)` equality (exact string match, NOT a hash). If an existing row matches the same session and content, return it without inserting — regardless of the existing row's `consumed_at` value. A consumed row stays consumed; dedup does not reset `consumed_at`. Otherwise INSERT a new row with `consumed_at = NULL`. `sync_id` prefix is `"pr-"`. |
 | S3-R06 | MUST | `AddPromptIfMissing` returns a non-nil error when `params.SessionID` does not reference an existing session. |
 | S3-R07 | MUST | `RecentPrompts(ctx context.Context, project string, limit int) ([]Prompt, error)` returns prompts ordered by `created_at DESC`. When `project` is empty returns from all projects. Default `limit` is 50 when `<= 0`. |
 | S3-R08 | MUST | `SearchPrompts(ctx context.Context, params SearchPromptsParams) ([]Prompt, error)` queries `prompts_fts` using BM25. Params: `Q`, `Project` (optional), `Limit` (default 20). Returns empty slice (not error) on no matches. |
@@ -551,7 +553,114 @@ And    ByProject contains a ProjectStats for "A" with ObservationCount=5, Prompt
 
 ---
 
-## 5. Cross-cutting requirements
+## 5. Slice 4 — Prompt Durability (added 2026-07-04 via change `envelope-status-durable-prompts`)
+
+### 5.1 Requirements
+
+#### Migration 0004: consumed_at column
+
+| ID | Requirement |
+|----|-------------|
+| R-PROMPT-01 | Migration 0004 MUST add a nullable `consumed_at TEXT` column to `user_prompts` with a `DEFAULT NULL`. The migration MUST apply cleanly on top of a database that has migrations 0001–0003 applied. Historical rows (all `NULL consumed_at`) are treated as unconsumed — no backfill is required. |
+
+#### ConsumeLatestPrompt
+
+| ID | Requirement |
+|----|-------------|
+| R-PROMPT-02 | `ConsumeLatestPrompt(ctx context.Context, sessionID string) (Prompt, bool, error)` MUST exist on `*Store`. Within a single transaction it MUST: (1) SELECT the `user_prompts` row with `consumed_at IS NULL` for the given `session_id`, ordered by `created_at DESC, id DESC LIMIT 1`; (2) if found, UPDATE that row's `consumed_at` to the current UTC time and return the row with `found = true`; (3) if not found, return the zero `Prompt` value with `found = false` and `err = nil`. |
+| R-PROMPT-03 | A `user_prompts` row with `consumed_at IS NOT NULL` MUST NOT be returned by `ConsumeLatestPrompt`. The same row cannot be consumed twice regardless of the number of `ion_save` calls. |
+
+### 5.2 Scenarios (Prompt Durability)
+
+**P-01 — Migration 0004 applies cleanly**
+```
+Given  a store with migrations 0001, 0002, 0003 applied
+When   store.Open is called after migration 0004 code is in place
+Then   schema_version contains rows for versions 1, 2, 3, and 4
+And    PRAGMA table_info(user_prompts) includes consumed_at as a nullable TEXT column
+```
+
+**P-02 — Historical rows are NULL by default**
+```
+Given  prompt rows inserted before migration 0004 (no consumed_at column at insert time)
+When   migration 0004 is applied
+Then   all pre-existing rows have consumed_at = NULL
+And    the migration MUST NOT fail on a non-empty table
+```
+
+**P-03 — Unconsumed prompt is found and marked consumed**
+```
+Given  a user_prompts row with session_id=S, consumed_at IS NULL
+When   ConsumeLatestPrompt(ctx, S) is called
+Then   the returned found is true
+And    the returned Prompt.ID matches the row
+And    a direct SQL query confirms consumed_at IS NOT NULL on that row
+```
+
+**P-04 — No unconsumed prompt returns found=false**
+```
+Given  no user_prompts row with consumed_at IS NULL for session_id=S
+When   ConsumeLatestPrompt(ctx, S) is called
+Then   found is false and err is nil
+```
+
+**P-05 — Atomicity — concurrent calls consume exactly once**
+```
+Given  one user_prompts row with consumed_at IS NULL for session_id=S
+When   two concurrent goroutines call ConsumeLatestPrompt(ctx, S) simultaneously
+Then   exactly one returns found=true
+And    the other returns found=false
+And    consumed_at on the row is set exactly once
+```
+
+**P-06 — Latest unconsumed is selected when multiple exist**
+```
+Given  two rows for session_id=S both with consumed_at IS NULL, created at T1 < T2
+When   ConsumeLatestPrompt(ctx, S) is called
+Then   the row created at T2 is consumed and returned
+```
+
+**P-07 — Already-consumed row is skipped**
+```
+Given  a row with consumed_at IS NOT NULL is the only row for session S
+When   ConsumeLatestPrompt(ctx, S) is called
+Then   found is false
+```
+
+**P-08 — Dedup returns existing row regardless of consumed_at**
+```
+Given  a user_prompts row with session_id=S, content=C, consumed_at IS NOT NULL
+When   AddPromptIfMissing is called with the same session and content
+Then   no new row is inserted
+And    the returned Prompt is the existing row (consumed state unaffected)
+```
+
+**P-09 — New row inserted with consumed_at NULL**
+```
+Given  no existing row for (session_id=S, content=C2)
+When   AddPromptIfMissing is called
+Then   a new row is inserted with consumed_at = NULL
+And    the returned Prompt reflects the new row
+```
+
+**P-10 — Same content in different sessions creates separate rows**
+```
+Given  content C inserted for session_id=S1
+When   AddPromptIfMissing is called with the same content but session_id=S2
+Then   a new row is inserted (total prompts increases by 1)
+```
+
+### 5.3 Acceptance Criteria (Slice 4)
+
+- [x] `go test ./internal/store/...` includes tests for `ConsumeLatestPrompt`, migration 0004, and dedup interaction
+- [x] Migration 0004 applies cleanly on a database with existing rows
+- [x] Atomicity test passes (concurrent consume uses a transaction)
+- [x] `ConsumeLatestPrompt` respects the `consumed_at IS NULL` and `ORDER BY created_at DESC, id DESC` semantics
+- [x] Coverage >= 85% on `internal/store/prompts.go`
+
+---
+
+## 6. Cross-cutting requirements
 
 | # | Verb | Requirement |
 |---|------|-------------|
@@ -569,7 +678,7 @@ And    ByProject contains a ProjectStats for "A" with ObservationCount=5, Prompt
 
 ---
 
-## 6. Out of scope
+## 7. Out of scope
 
 | Item | Deferred to |
 |------|-------------|
@@ -586,7 +695,7 @@ And    ByProject contains a ProjectStats for "A" with ObservationCount=5, Prompt
 
 ---
 
-## 7. Error sentinel reference
+## 8. Error sentinel reference
 
 | Sentinel | Used when |
 |----------|-----------|
