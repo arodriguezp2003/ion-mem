@@ -3,6 +3,8 @@ package store_test
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ionix/ion-mem/internal/store"
@@ -620,6 +622,49 @@ func TestDeleteSession_BlockedByPrompt(t *testing.T) {
 	}
 	if !isSessionHasObservations(err) {
 		t.Fatalf("expected ErrSessionHasObservations, got %v", err)
+	}
+}
+
+// TestConsumeLatestPrompt_ConcurrentAtomicity verifies that concurrent calls to
+// ConsumeLatestPrompt for a session with exactly one unconsumed prompt result in
+// exactly one goroutine receiving found=true and all others found=false, with no
+// errors from any goroutine (spec R-PROMPT-02 atomicity requirement).
+func TestConsumeLatestPrompt_ConcurrentAtomicity(t *testing.T) {
+	const goroutines = 8
+	s := mustOpen(t)
+	sess := mustSession(t, s, "proj")
+	ctx := context.Background()
+
+	mustPrompt(t, s, sess.ID, "single unconsumed", "proj")
+
+	var (
+		wg        sync.WaitGroup
+		foundOnce atomic.Int32
+		errCount  atomic.Int32
+	)
+
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_, found, err := s.ConsumeLatestPrompt(ctx, sess.ID)
+			if err != nil {
+				errCount.Add(1)
+				t.Errorf("ConsumeLatestPrompt concurrent: %v", err)
+				return
+			}
+			if found {
+				foundOnce.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if errCount.Load() != 0 {
+		t.Fatalf("got %d errors from concurrent ConsumeLatestPrompt, want 0", errCount.Load())
+	}
+	if foundOnce.Load() != 1 {
+		t.Fatalf("exactly 1 goroutine must get found=true, got %d", foundOnce.Load())
 	}
 }
 
