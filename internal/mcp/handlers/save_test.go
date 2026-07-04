@@ -53,13 +53,17 @@ func TestSave_StatusOkOnSuccess(t *testing.T) {
 
 func TestSave_with_buffered_prompt_attaches_it(t *testing.T) {
 	st := mustStore(t)
-	ionSrv, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
 		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
 	}))
 
-	// Manually inject a prompt into the buffer for a specific session.
 	sessionID := "test-session-attach"
-	ionSrv.RecordPromptForTest(sessionID, "user prompt text")
+
+	// Seed the prompt via ion_save_prompt so it is stored durably in the DB.
+	callTool(t, ts, "ion_save_prompt", map[string]any{
+		"session_id": sessionID,
+		"content":    "user prompt text",
+	})
 
 	res := callTool(t, ts, "ion_save", map[string]any{
 		"title":          "note with prompt",

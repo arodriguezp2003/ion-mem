@@ -11,7 +11,7 @@ import (
 // buildSavePromptTool constructs the ion_save_prompt ServerTool.
 func buildSavePromptTool(s *Server) mcpserver.ServerTool {
 	tool := mcplib.NewTool("ion_save_prompt",
-		mcplib.WithDescription("Record a user prompt for context capture. Stores via store.AddPromptIfMissing AND buffers in the single-slot buffer for the session. Empty content is rejected (buffer not overwritten). Returns envelope + id, sync_id, session_id."),
+		mcplib.WithDescription("Record a user prompt for durable context capture. Stores via store.AddPromptIfMissing (dedup on session+content). Empty content is rejected. Returns envelope + id, sync_id, session_id."),
 		mcplib.WithString("content", mcplib.Description("Prompt content (required)."), mcplib.Required()),
 		mcplib.WithString("session_id", mcplib.Description("Session ID. Auto-created if absent.")),
 		mcplib.WithString("project", mcplib.Description("Project override.")),
@@ -53,7 +53,8 @@ func handleSavePrompt(s *Server) toolHandler {
 			return textResult(raw), nil
 		}
 
-		// Store the prompt persistently.
+		// Store the prompt durably. No in-memory buffer is written —
+		// ion_save consumes via store.ConsumeLatestPrompt (spec R-S2-SP-02).
 		prompt, err := s.store.AddPromptIfMissing(ctx, store.AddPromptParams{
 			SessionID: sessionID,
 			Content:   content,
@@ -63,9 +64,6 @@ func handleSavePrompt(s *Server) toolHandler {
 			raw := BuildError(det, CodeDBError, "error saving prompt: "+err.Error())
 			return textResult(raw), nil
 		}
-
-		// Buffer the prompt in the single-slot buffer for this session.
-		s.recordPrompt(sessionID, content)
 
 		raw := Build(det, "prompt saved", map[string]any{
 			"id":         prompt.ID,

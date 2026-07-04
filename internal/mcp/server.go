@@ -33,8 +33,9 @@ var agentTools = map[string]struct{}{
 }
 
 // Server is the central context carrier for the MCP stdio server.
-// It owns the store reference, the project resolver, session tracking,
-// and the single-slot prompt buffer.
+// It owns the store reference, the project resolver, and session tracking.
+// Prompt capture is durable: ion_save_prompt writes to the store and
+// ion_save consumes via store.ConsumeLatestPrompt — no in-memory buffer.
 type Server struct {
 	store       *store.Store
 	detect      func(cwd string) (project.DetectionResult, error)
@@ -48,10 +49,6 @@ type Server struct {
 	// Session tracking: maps project → last used session ID.
 	sessionMu      sync.Mutex
 	sessionsByProj map[string]string
-
-	// Single-slot prompt buffer: maps session ID → last prompt content.
-	promptMu         sync.Mutex
-	promptsBySession map[string]string
 }
 
 // Option configures a Server.
@@ -83,11 +80,10 @@ func WithDetectFunc(fn func(cwd string) (project.DetectionResult, error)) Option
 // New creates a new Server wrapping the given Store with the supplied options.
 func New(st *store.Store, opts ...Option) *Server {
 	s := &Server{
-		store:            st,
-		detect:           project.DetectFull,
-		profile:          "agent",
-		sessionsByProj:   make(map[string]string),
-		promptsBySession: make(map[string]string),
+		store:          st,
+		detect:         project.DetectFull,
+		profile:        "agent",
+		sessionsByProj: make(map[string]string),
 	}
 	for _, o := range opts {
 		o(s)
@@ -155,10 +151,4 @@ func textResult(raw []byte) *mcplib.CallToolResult {
 			mcplib.TextContent{Type: "text", Text: string(raw)},
 		},
 	}
-}
-
-// RecordPromptForTest exposes recordPrompt for external test packages.
-// It allows handler tests (in package handlers_test) to pre-seed the prompt buffer.
-func (s *Server) RecordPromptForTest(sessionID, content string) {
-	s.recordPrompt(sessionID, content)
 }

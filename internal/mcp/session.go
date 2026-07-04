@@ -85,20 +85,3 @@ func containsAny(s string, substrings ...string) bool {
 
 // autoSessionCounter provides monotonically increasing values for unique session IDs.
 var autoSessionCounter atomic.Int64
-
-// recordPrompt stores the latest prompt content for the given session (single-slot, overwrites).
-func (s *Server) recordPrompt(sessionID, content string) {
-	s.promptMu.Lock()
-	defer s.promptMu.Unlock()
-	s.promptsBySession[sessionID] = content
-}
-
-// lastPromptForSession returns the last buffered prompt for the session, clearing the slot.
-// Returns empty string when no prompt is buffered.
-func (s *Server) lastPromptForSession(sessionID string) string {
-	s.promptMu.Lock()
-	defer s.promptMu.Unlock()
-	p := s.promptsBySession[sessionID]
-	delete(s.promptsBySession, sessionID)
-	return p
-}

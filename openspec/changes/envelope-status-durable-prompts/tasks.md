@@ -59,9 +59,9 @@ Chain strategy: pending
 
 ## Phase 3: Slice 2 — Integration & Buffer Removal (TDD)
 
-- [ ] 3.1 RED — Rewrite `internal/mcp/prompt_test.go`: replace buffer tests with `TestConsumeLatestPrompt_*` integration tests using `ConsumeLatestPrompt` via a real store (restart-durability, double-consume false, dedup+consumed interaction). Remove all references to `recordPrompt`/`lastPromptForSession`/`RecordPromptForTest`. Expect compile failure.
-- [ ] 3.2 GREEN — Remove from `internal/mcp/server.go`: `promptsBySession`, `promptMu` fields and `make(map[string]string)` init, `RecordPromptForTest` method. Remove from `internal/mcp/session.go`: `recordPrompt` and `lastPromptForSession` methods. Tests must compile.
-- [ ] 3.3 GREEN — In `internal/mcp/tool_save_prompt.go`: remove `s.recordPrompt(sessionID, content)` call. In `internal/mcp/tool_save.go`: replace `s.lastPromptForSession(sessionID)` block with `_, promptAttached, _ = s.store.ConsumeLatestPrompt(ctx, sessionID)`. All Slice 2 prompt tests must pass.
-- [ ] 3.4 RED — Update `internal/mcp/handlers/save_test.go`: replace `ionSrv.RecordPromptForTest(...)` with `ion_save_prompt` tool call seeding the DB; assert `prompt_attached: true`. Update `internal/mcp/handlers/save_prompt_test.go` similarly. Expect failure.
-- [ ] 3.5 GREEN — Adjust handler test helpers to wire `ion_save_prompt` as the seeding path. All handler tests must pass.
-- [ ] 3.6 VERIFY — `go test ./...`, `go vet ./...`, `gofmt -l ./...` all clean. No references to `RecordPromptForTest` or `promptsBySession` remain.
+- [x] 3.1 RED — Rewrite `internal/mcp/prompt_test.go`: replace buffer tests with `TestConsumeLatestPrompt_*` integration tests using `ConsumeLatestPrompt` via a real store (restart-durability, double-consume false, dedup+consumed interaction). Remove all references to `recordPrompt`/`lastPromptForSession`/`RecordPromptForTest`. Expect compile failure.
+- [x] 3.2 GREEN — Remove from `internal/mcp/server.go`: `promptsBySession`, `promptMu` fields and `make(map[string]string)` init, `RecordPromptForTest` method. Remove from `internal/mcp/session.go`: `recordPrompt` and `lastPromptForSession` methods. Tests must compile.
+- [x] 3.3 GREEN — In `internal/mcp/tool_save_prompt.go`: remove `s.recordPrompt(sessionID, content)` call. In `internal/mcp/tool_save.go`: replace `s.lastPromptForSession(sessionID)` block with `_, promptAttached, _ = s.store.ConsumeLatestPrompt(ctx, sessionID)`. All Slice 2 prompt tests must pass.
+- [x] 3.4 RED — Update `internal/mcp/handlers/save_test.go`: replace `ionSrv.RecordPromptForTest(...)` with `ion_save_prompt` tool call seeding the DB; assert `prompt_attached: true`. Update `internal/mcp/handlers/save_prompt_test.go` similarly. Expect failure.
+- [x] 3.5 GREEN — Adjust handler test helpers to wire `ion_save_prompt` as the seeding path. All handler tests must pass.
+- [x] 3.6 VERIFY — `go test ./...`, `go vet ./...`, `gofmt -l ./...` all clean. No references to `RecordPromptForTest` or `promptsBySession` remain.

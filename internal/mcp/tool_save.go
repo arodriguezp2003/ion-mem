@@ -56,18 +56,17 @@ func handleSave(s *Server) toolHandler {
 			return textResult(raw), nil
 		}
 
-		// Attach prompt if requested and buffer is non-empty.
+		// Attach prompt if requested: consume the latest unconsumed prompt row
+		// from the durable store. Survives process restarts between save_prompt
+		// and save calls (spec R-TOOL-SAVE-04, R-S2-SESSION-01).
 		promptAttached := false
 		if capturePrompt {
-			lastPrompt := s.lastPromptForSession(sessionID)
-			if lastPrompt != "" {
-				_, _ = s.store.AddPromptIfMissing(ctx, store.AddPromptParams{
-					SessionID: sessionID,
-					Content:   lastPrompt,
-					Project:   det.Project,
-				})
-				promptAttached = true
+			_, attached, err := s.store.ConsumeLatestPrompt(ctx, sessionID)
+			if err != nil {
+				raw := BuildError(det, CodeDBError, "error consuming prompt: "+err.Error())
+				return textResult(raw), nil
 			}
+			promptAttached = attached
 		}
 
 		// Save observation.
