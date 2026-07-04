@@ -381,14 +381,38 @@ func (s *Store) DeleteObservation(ctx context.Context, id int64, hard bool) erro
 // Search queries observations_fts using BM25 ranking.
 // Soft-deleted observations are excluded. Returns empty slice (not error) on no matches.
 func (s *Store) Search(ctx context.Context, params SearchParams) ([]SearchResult, error) {
-	limit := params.Limit
-	if limit <= 0 {
-		limit = 20
-	}
-
 	sanitized := sanitizeFTS(params.Q)
 	if sanitized == "" {
 		return nil, nil
+	}
+	return s.searchMatch(ctx, sanitized, params)
+}
+
+// SearchWithFallback runs Search and, when the implicit-AND query matches
+// nothing and the query has multiple terms, retries with OR between terms.
+// The returned bool is true when the results came from the OR fallback.
+func (s *Store) SearchWithFallback(ctx context.Context, params SearchParams) ([]SearchResult, bool, error) {
+	results, err := s.Search(ctx, params)
+	if err != nil || len(results) > 0 {
+		return results, false, err
+	}
+
+	orQuery := sanitizeFTSOr(params.Q)
+	if orQuery == "" {
+		return results, false, nil
+	}
+	fallback, err := s.searchMatch(ctx, orQuery, params)
+	if err != nil {
+		return nil, false, err
+	}
+	return fallback, len(fallback) > 0, nil
+}
+
+// searchMatch executes the FTS5 query with the given pre-sanitized match expression.
+func (s *Store) searchMatch(ctx context.Context, matchExpr string, params SearchParams) ([]SearchResult, error) {
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 20
 	}
 
 	query := `
@@ -401,7 +425,7 @@ func (s *Store) Search(ctx context.Context, params SearchParams) ([]SearchResult
 		JOIN observations o ON o.id = observations_fts.rowid
 		WHERE observations_fts MATCH ?
 		  AND o.deleted_at IS NULL`
-	args := []interface{}{sanitized}
+	args := []interface{}{matchExpr}
 
 	if params.Type != "" {
 		query += " AND o.type=?"

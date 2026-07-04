@@ -294,3 +294,141 @@ func TestAddObservation_ConcurrentSuccess(t *testing.T) {
 		}
 	}
 }
+
+// TestSearchWithFallback_ORFallbackFindsPartialMatch verifies that when the
+// implicit-AND query matches nothing, the OR fallback surfaces observations
+// matching a subset of terms and flags them as fuzzy.
+func TestSearchWithFallback_ORFallbackFindsPartialMatch(t *testing.T) {
+	s := mustOpen(t)
+	ctx := context.Background()
+	sess := mustSession(t, s, "p")
+
+	_, err := s.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sess.ID, Type: "decision", Title: "envelope error handling",
+		Content: "structured envelope error design", Project: "p", Scope: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	results, fuzzy, err := s.SearchWithFallback(ctx, store.SearchParams{Q: "envelope kubernetes"})
+	if err != nil {
+		t.Fatalf("SearchWithFallback: %v", err)
+	}
+	if !fuzzy {
+		t.Error("expected fuzzy=true when results come from OR fallback")
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 fallback result, got %d", len(results))
+	}
+}
+
+// TestSearchWithFallback_ExactMatchNotFuzzy verifies that an AND match returns
+// fuzzy=false and does not trigger the fallback.
+func TestSearchWithFallback_ExactMatchNotFuzzy(t *testing.T) {
+	s := mustOpen(t)
+	ctx := context.Background()
+	sess := mustSession(t, s, "p")
+
+	_, err := s.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sess.ID, Type: "decision", Title: "envelope error handling",
+		Content: "structured envelope error design", Project: "p", Scope: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	results, fuzzy, err := s.SearchWithFallback(ctx, store.SearchParams{Q: "envelope error"})
+	if err != nil {
+		t.Fatalf("SearchWithFallback: %v", err)
+	}
+	if fuzzy {
+		t.Error("expected fuzzy=false for a direct AND match")
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+}
+
+// TestSearchWithFallback_SingleTermNoFallback verifies that a single-term miss
+// returns empty without fuzzy (OR fallback is pointless for one term).
+func TestSearchWithFallback_SingleTermNoFallback(t *testing.T) {
+	s := mustOpen(t)
+	ctx := context.Background()
+	sess := mustSession(t, s, "p")
+
+	_, err := s.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sess.ID, Type: "decision", Title: "envelope error handling",
+		Content: "structured envelope error design", Project: "p", Scope: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	results, fuzzy, err := s.SearchWithFallback(ctx, store.SearchParams{Q: "kubernetes"})
+	if err != nil {
+		t.Fatalf("SearchWithFallback: %v", err)
+	}
+	if fuzzy {
+		t.Error("expected fuzzy=false when no fallback ran")
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+}
+
+// TestSearchWithFallback_AllTermsMissing verifies that when neither AND nor OR
+// matches anything, the result is empty and not fuzzy.
+func TestSearchWithFallback_AllTermsMissing(t *testing.T) {
+	s := mustOpen(t)
+	ctx := context.Background()
+	sess := mustSession(t, s, "p")
+
+	_, err := s.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sess.ID, Type: "decision", Title: "envelope error handling",
+		Content: "structured envelope error design", Project: "p", Scope: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+
+	results, fuzzy, err := s.SearchWithFallback(ctx, store.SearchParams{Q: "kubernetes docker"})
+	if err != nil {
+		t.Fatalf("SearchWithFallback: %v", err)
+	}
+	if fuzzy {
+		t.Error("expected fuzzy=false when fallback found nothing")
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected 0 results, got %d", len(results))
+	}
+}
+
+// TestSearchWithFallback_FiltersApplyToFallback verifies that type/project
+// filters constrain the OR fallback query as well.
+func TestSearchWithFallback_FiltersApplyToFallback(t *testing.T) {
+	s := mustOpen(t)
+	ctx := context.Background()
+	sess := mustSession(t, s, "p")
+
+	for _, typ := range []string{"decision", "bugfix"} {
+		_, err := s.AddObservation(ctx, store.AddObservationParams{
+			SessionID: sess.ID, Type: typ, Title: "envelope note " + typ,
+			Content: "envelope content", Project: "p", Scope: "project",
+		})
+		if err != nil {
+			t.Fatalf("AddObservation %s: %v", typ, err)
+		}
+	}
+
+	results, fuzzy, err := s.SearchWithFallback(ctx, store.SearchParams{Q: "envelope kubernetes", Type: "bugfix"})
+	if err != nil {
+		t.Fatalf("SearchWithFallback: %v", err)
+	}
+	if !fuzzy {
+		t.Error("expected fuzzy=true from OR fallback")
+	}
+	if len(results) != 1 || results[0].Observation.Type != "bugfix" {
+		t.Fatalf("expected exactly the bugfix observation, got %d results", len(results))
+	}
+}

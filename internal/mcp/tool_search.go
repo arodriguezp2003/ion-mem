@@ -11,7 +11,7 @@ import (
 // buildSearchTool constructs the ion_search ServerTool.
 func buildSearchTool(s *Server) mcpserver.ServerTool {
 	tool := mcplib.NewTool("ion_search",
-		mcplib.WithDescription("Full-text search over saved observations using BM25 ranking. Returns envelope with results array and count. Zero results returns results:[] (never a Go error)."),
+		mcplib.WithDescription("Full-text search over saved observations using BM25 ranking. Returns envelope with results array and count. When the all-terms query matches nothing, retries with OR between terms and sets fuzzy:true. Zero results returns results:[] (never a Go error)."),
 		mcplib.WithString("query", mcplib.Description("Search query (required)."), mcplib.Required()),
 		mcplib.WithString("type", mcplib.Description("Filter by observation type.")),
 		mcplib.WithString("project", mcplib.Description("Project override.")),
@@ -56,7 +56,7 @@ func handleSearch(s *Server) toolHandler {
 		}
 		// When projectArg is non-empty, use it directly (already in det.Project via resolveProject).
 
-		results, err := s.store.Search(ctx, params)
+		results, fuzzy, err := s.store.SearchWithFallback(ctx, params)
 		if err != nil {
 			raw := BuildError(det, CodeDBError, "search error: "+err.Error())
 			return textResult(raw), nil
@@ -95,6 +95,7 @@ func handleSearch(s *Server) toolHandler {
 		extras := map[string]any{
 			"results": resultAny,
 			"count":   len(results),
+			"fuzzy":   fuzzy,
 		}
 		raw := Build(det, "search complete", extras)
 		return textResult(raw), nil

@@ -46,6 +46,21 @@ func sanitizeFTS(query string) string {
 	return strings.Join(quoted, " ")
 }
 
+// sanitizeFTSOr quotes each term like sanitizeFTS but joins them with OR,
+// used as a recall fallback when the implicit-AND query matches nothing.
+// Returns "" for queries with fewer than two terms (fallback would be identical).
+func sanitizeFTSOr(query string) string {
+	terms := strings.Fields(query)
+	if len(terms) < 2 {
+		return ""
+	}
+	quoted := make([]string, 0, len(terms))
+	for _, t := range terms {
+		quoted = append(quoted, `"`+strings.ReplaceAll(t, `"`, `""`)+`"`)
+	}
+	return strings.Join(quoted, " OR ")
+}
+
 // normalizeForHash normalizes s for deduplication: lowercase + collapse whitespace.
 func normalizeForHash(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))

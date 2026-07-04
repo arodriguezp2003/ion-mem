@@ -142,3 +142,51 @@ func TestSearch_all_projects_true_returns_across_projects(t *testing.T) {
 		t.Errorf("all_projects=true: got %d results, want >= 2", len(results))
 	}
 }
+
+func TestSearch_FuzzyFallbackWhenPartialMatch(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	sessID := "fuzzy-test-session"
+	st.CreateSession(ctx, store.CreateSessionParams{ID: sessID, Project: "myproj"})
+	st.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sessID, Type: "manual", Title: "envelope error handling",
+		Content: "structured envelope design", Project: "myproj", Scope: "project",
+	})
+
+	// One term matches, one does not — AND misses, OR fallback recovers.
+	res := callTool(t, ts, "ion_search", map[string]any{"query": "envelope kubernetes"})
+	env := decodeText(t, res)
+
+	if env["fuzzy"] != true {
+		t.Errorf("fuzzy = %v, want true", env["fuzzy"])
+	}
+	if count := env["count"].(float64); count != 1 {
+		t.Errorf("count = %v, want 1", count)
+	}
+}
+
+func TestSearch_FuzzyFalseOnExactMatch(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	sessID := "fuzzy-false-session"
+	st.CreateSession(ctx, store.CreateSessionParams{ID: sessID, Project: "myproj"})
+	st.AddObservation(ctx, store.AddObservationParams{
+		SessionID: sessID, Type: "manual", Title: "envelope error handling",
+		Content: "structured envelope design", Project: "myproj", Scope: "project",
+	})
+
+	res := callTool(t, ts, "ion_search", map[string]any{"query": "envelope error"})
+	env := decodeText(t, res)
+
+	if env["fuzzy"] != false {
+		t.Errorf("fuzzy = %v, want false", env["fuzzy"])
+	}
+}
