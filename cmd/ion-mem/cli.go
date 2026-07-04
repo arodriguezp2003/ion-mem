@@ -22,14 +22,17 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/ionix/ion-mem/internal/mcp"
 	"github.com/ionix/ion-mem/internal/store"
 )
 
-// version is the ion-mem release identifier. Bumped manually on tagged releases.
-const version = "0.1.0"
+// version is the ion-mem release identifier. Set at build time via
+// -ldflags "-X main.version=v1.2.3"; when unset, versionString falls back
+// to the module version recorded by the Go toolchain (go install @version).
+var version = ""
 
 // mcpConfig collects the parsed flags for the `mcp` subcommand.
 type mcpConfig struct {
@@ -76,16 +79,31 @@ func defaultDataDir(homeDir func() (string, error)) string {
 	return filepath.Join(home, ".ion-mem")
 }
 
+// resolvedVersion returns the effective version. Resolution order:
+// ldflags-injected version, module version from build info
+// (go install @version), then "dev".
+func resolvedVersion() string {
+	if version != "" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return "dev"
+}
+
 // versionString returns the human-readable version banner printed by the
 // `version` subcommand.
 func versionString() string {
-	return "ion-mem " + version
+	return "ion-mem " + resolvedVersion()
 }
 
-// banner is the ASCII-art identity card printed before usage() output.
+// banner returns the ASCII-art identity card printed before usage() output.
 // Rendered with figlet's `colossal` font from "ION MEM" — embed verbatim so
-// the binary has no runtime dependency on figlet.
-const banner = `
+// the binary has no runtime dependency on figlet. A function (not a const)
+// because the version is resolved at runtime via versionString.
+func banner() string {
+	return `
 8888888 .d88888b. 888b    888   888b     d8888888888888888b     d888
   888  d88P" "Y88b8888b   888   8888b   d8888888       8888b   d8888
   888  888     88888888b  888   88888b.d88888888       88888b.d88888
@@ -95,13 +113,14 @@ const banner = `
   888  Y88b. .d88P888   Y8888   888   "   888888       888   "   888
 8888888 "Y88888P" 888    Y888   888       8888888888888888       888
 
-Persistent memory for AI coding agents — local-first, team-grade   v` + version + `
+Persistent memory for AI coding agents — local-first, team-grade   ` + resolvedVersion() + `
 `
+}
 
 // usage returns the top-level help text printed by `ion-mem`, `ion-mem help`,
 // `--help`, or `-h`. Starts with the banner identity card.
 func usage() string {
-	return banner + `
+	return banner() + `
 Usage: ion-mem <command> [flags]
 
 Commands:

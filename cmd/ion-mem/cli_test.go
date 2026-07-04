@@ -392,3 +392,24 @@ type stringErr string
 func (e stringErr) Error() string { return string(e) }
 
 func fakeHome() (string, error) { return "/tmp/fake-home", nil }
+
+func TestVersionString_ldflagsOverrideWins(t *testing.T) {
+	old := version
+	version = "v9.9.9"
+	t.Cleanup(func() { version = old })
+
+	if got := versionString(); got != "ion-mem v9.9.9" {
+		t.Errorf("versionString = %q, want %q", got, "ion-mem v9.9.9")
+	}
+}
+
+func TestVersionString_fallbackNeverEmpty(t *testing.T) {
+	old := version
+	version = ""
+	t.Cleanup(func() { version = old })
+
+	got := versionString()
+	if got == "ion-mem " {
+		t.Errorf("versionString = %q, want a non-empty version suffix", got)
+	}
+}
