@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,73 @@ func TestModel_fuzzyIndicatorClearedOnNonFuzzyResults(t *testing.T) {
 
 	if m.fuzzyResults {
 		t.Error("fuzzyResults should be false when results are not fuzzy")
+	}
+}
+
+// ─── hybrid indicator ────────────────────────────────────────────────────────
+
+func TestModel_hybridIndicatorSetWhenResultsAreHybrid(t *testing.T) {
+	m := newModel()
+	m.view = viewObservations
+	m.searching = true
+
+	obs := makeObservations()
+	next, _ := m.Update(searchResultMsg{results: obs, hybrid: true})
+	m = next.(Model)
+
+	if !m.hybridResults {
+		t.Error("hybridResults should be true when search used RRF hybrid fusion")
+	}
+	if m.searching {
+		t.Error("searching should be cleared after results arrive")
+	}
+}
+
+func TestModel_hybridIndicatorClearedOnNonHybridResults(t *testing.T) {
+	m := newModel()
+	m.view = viewObservations
+	m.hybridResults = true // was hybrid before
+
+	obs := makeObservations()
+	next, _ := m.Update(searchResultMsg{results: obs, hybrid: false})
+	m = next.(Model)
+
+	if m.hybridResults {
+		t.Error("hybridResults should be false when results are not hybrid")
+	}
+}
+
+func TestModel_hybridChipAppearsInViewWhenHybridAndSearchQuery(t *testing.T) {
+	m := newModel()
+	m.view = viewObservations
+	m.width = 80
+	m.height = 24
+	m.searchQuery = "test"
+	m.hybridResults = true
+	m.observations = makeObservations()
+
+	rendered := m.viewObservations()
+	if !strings.Contains(rendered, "~HYBRID") {
+		t.Error("viewObservations: ~HYBRID chip should appear in status bar when hybridResults=true and searchQuery is set")
+	}
+}
+
+func TestModel_fuzzyChipAppearsWhenFuzzyAndNoHybrid(t *testing.T) {
+	m := newModel()
+	m.view = viewObservations
+	m.width = 80
+	m.height = 24
+	m.searchQuery = "test"
+	m.fuzzyResults = true
+	m.hybridResults = false
+	m.observations = makeObservations()
+
+	rendered := m.viewObservations()
+	if !strings.Contains(rendered, "~FUZZY") {
+		t.Error("viewObservations: ~FUZZY chip should appear when fuzzyResults=true and hybridResults=false")
+	}
+	if strings.Contains(rendered, "~HYBRID") {
+		t.Error("viewObservations: ~HYBRID chip should NOT appear when hybridResults=false")
 	}
 }
 

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 
+	"github.com/ionix/ion-mem/internal/hybrid"
 	"github.com/ionix/ion-mem/internal/store"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -56,7 +57,11 @@ func handleSearch(s *Server) toolHandler {
 		}
 		// When projectArg is non-empty, use it directly (already in det.Project via resolveProject).
 
-		results, fuzzy, err := s.store.SearchWithFallback(ctx, params)
+		// Use hybrid searcher (reads embeddings.enabled from settings).
+		// When embeddings are disabled or Ollama is unreachable, falls back to
+		// BM25 silently — identical behaviour to the previous implementation.
+		searcher := hybrid.NewSearcherFromSettings(ctx, s.store)
+		results, meta, err := searcher.Search(ctx, params)
 		if err != nil {
 			raw := BuildError(det, CodeDBError, "search error: "+err.Error())
 			return textResult(raw), nil
@@ -100,7 +105,8 @@ func handleSearch(s *Server) toolHandler {
 		extras := map[string]any{
 			"results": resultAny,
 			"count":   len(results),
-			"fuzzy":   fuzzy,
+			"fuzzy":   meta.Fuzzy,
+			"hybrid":  meta.Hybrid,
 		}
 		raw := Build(det, "search complete", extras)
 		return textResult(raw), nil

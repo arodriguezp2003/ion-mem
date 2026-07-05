@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ionix/ion-mem/internal/hybrid"
 	"github.com/ionix/ion-mem/internal/store"
 )
 
@@ -49,10 +50,11 @@ type observationsLoadedMsg struct {
 	project      string
 }
 
-// searchResultMsg is sent when a SearchWithFallback completes.
+// searchResultMsg is sent when a search completes (BM25 or hybrid).
 type searchResultMsg struct {
 	results []store.Observation
 	fuzzy   bool
+	hybrid  bool
 }
 
 // searchSubmitMsg is sent when the user presses Enter in the search input.
@@ -182,6 +184,13 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
+	// Hybrid chip: same accent family as fuzzy — uppercase ~HYBRID.
+	hybridChipStyle = lipgloss.NewStyle().
+				Background(defaultTheme.accent).
+				Foreground(lipgloss.AdaptiveColor{Dark: "#FFEDEE", Light: "#FFFFFF"}).
+				Bold(true).
+				Padding(0, 1)
+
 	// Delete confirm.
 	confirmStyle = lipgloss.NewStyle().Foreground(defaultTheme.danger).Bold(true)
 
@@ -302,10 +311,11 @@ type Model struct {
 	obsOffset       int // first visible index in the windowed observations list
 
 	// Search (per-project observations view).
-	searching    bool
-	searchQuery  string
-	fuzzyResults bool
-	searchInput  textinput.Model
+	searching     bool
+	searchQuery   string
+	fuzzyResults  bool
+	hybridResults bool // true when last search used hybrid RRF fusion
+	searchInput   textinput.Model
 
 	// Global search (cross-project from projects view).
 	globalSearching bool   // true while search input is focused in projects view
@@ -520,6 +530,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case searchResultMsg:
 		m.observations = msg.results
 		m.fuzzyResults = msg.fuzzy
+		m.hybridResults = msg.hybrid
 		m.searching = false
 		m.obsCursor = 0
 		m.obsOffset = 0
@@ -587,6 +598,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searching = false
 			m.searchQuery = ""
 			m.fuzzyResults = false
+			m.hybridResults = false
 			return m, m.fetchObservations(m.selectedProject)
 		case msg.Type == tea.KeyEnter:
 			q := strings.TrimSpace(m.searchInput.Value())
@@ -622,6 +634,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.obsCursor = 0
 			m.obsOffset = 0
 			m.fuzzyResults = false
+			m.hybridResults = false
 			return m, m.runGlobalSearch(q)
 		default:
 			var cmd tea.Cmd
@@ -683,6 +696,7 @@ func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.obsCursor = 0
 		m.obsOffset = 0
 		m.fuzzyResults = false
+		m.hybridResults = false
 		m.view = viewObservations
 		return m, m.fetchObservations(m.selectedProject)
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == '/':
@@ -711,6 +725,7 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searching = false
 		m.searchQuery = ""
 		m.fuzzyResults = false
+		m.hybridResults = false
 	case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'k'):
 		if m.obsCursor > 0 {
 			m.obsCursor--
@@ -754,6 +769,7 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.view = viewProjects
 		m.globalQuery = ""
 		m.fuzzyResults = false
+		m.hybridResults = false
 		m.observations = nil
 		m.obsCursor = 0
 		m.obsOffset = 0
@@ -1250,10 +1266,15 @@ func (m Model) viewObservations() string {
 		statusLeft = "ERROR: " + m.err.Error()
 	}
 
-	// Build status line: left context + optional fuzzy chip right-aligned.
+	// Build status line: left context + optional fuzzy/hybrid chip right-aligned.
 	var statusLine string
-	if m.searchQuery != "" && m.fuzzyResults {
-		chip := fuzzyChipStyle.Render("~FUZZY")
+	if m.searchQuery != "" && (m.fuzzyResults || m.hybridResults) {
+		var chip string
+		if m.hybridResults {
+			chip = hybridChipStyle.Render("~HYBRID")
+		} else {
+			chip = fuzzyChipStyle.Render("~FUZZY")
+		}
 		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
@@ -1385,8 +1406,13 @@ func (m Model) viewGlobalSearchResults() string {
 	}
 
 	var statusLine string
-	if m.fuzzyResults {
-		chip := fuzzyChipStyle.Render("~FUZZY")
+	if m.hybridResults || m.fuzzyResults {
+		var chip string
+		if m.hybridResults {
+			chip = hybridChipStyle.Render("~HYBRID")
+		} else {
+			chip = fuzzyChipStyle.Render("~FUZZY")
+		}
 		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
@@ -1592,7 +1618,9 @@ func (m Model) runSearch(query string) tea.Cmd {
 	st := m.store
 	project := m.selectedProject
 	return func() tea.Msg {
-		results, fuzzy, err := st.SearchWithFallback(context.Background(), store.SearchParams{
+		ctx := context.Background()
+		searcher := hybrid.NewSearcherFromSettings(ctx, st)
+		results, meta, err := searcher.Search(ctx, store.SearchParams{
 			Q:       query,
 			Project: project,
 			Limit:   50,
@@ -1604,7 +1632,7 @@ func (m Model) runSearch(query string) tea.Cmd {
 		for _, r := range results {
 			obs = append(obs, r.Observation)
 		}
-		return searchResultMsg{results: obs, fuzzy: fuzzy}
+		return searchResultMsg{results: obs, fuzzy: meta.Fuzzy, hybrid: meta.Hybrid}
 	}
 }
 
@@ -1616,7 +1644,9 @@ func (m Model) runGlobalSearch(query string) tea.Cmd {
 	}
 	st := m.store
 	return func() tea.Msg {
-		results, fuzzy, err := st.SearchWithFallback(context.Background(), store.SearchParams{
+		ctx := context.Background()
+		searcher := hybrid.NewSearcherFromSettings(ctx, st)
+		results, meta, err := searcher.Search(ctx, store.SearchParams{
 			Q:     query,
 			Limit: 50,
 			// Project intentionally empty → all projects.
@@ -1628,7 +1658,7 @@ func (m Model) runGlobalSearch(query string) tea.Cmd {
 		for _, r := range results {
 			obs = append(obs, r.Observation)
 		}
-		return searchResultMsg{results: obs, fuzzy: fuzzy}
+		return searchResultMsg{results: obs, fuzzy: meta.Fuzzy, hybrid: meta.Hybrid}
 	}
 }
 
