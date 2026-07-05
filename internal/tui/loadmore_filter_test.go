@@ -54,16 +54,18 @@ func obsViewModelAt80x24(obs []store.Observation, cursor int) Model {
 func TestObsLoadMore_MessageAppendsRows(t *testing.T) {
 	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 4)
 	m.obsPageSize = 5
+	m.obsOffset2 = 5 // first page of 5 raw rows was already fetched
 
 	newPage := makeObsPage(6, 5, "decision")
-	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, nextOffset: 10})
+	// rawCount=5: the DB returned a full page of 5 rows (all matching the filter).
+	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, rawCount: 5})
 	m = next.(Model)
 
 	if len(m.observations) != 10 {
 		t.Errorf("after load-more, observations count = %d, want 10", len(m.observations))
 	}
 	if m.obsOffset2 != 10 {
-		t.Errorf("obsOffset2 = %d, want 10", m.obsOffset2)
+		t.Errorf("obsOffset2 = %d, want 10 (prev 5 + rawCount 5)", m.obsOffset2)
 	}
 }
 
@@ -75,7 +77,8 @@ func TestObsLoadMore_CursorAdvancesIntoNewPage(t *testing.T) {
 	m.obsPageSize = 5
 
 	newPage := makeObsPage(6, 3, "decision")
-	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, nextOffset: 5})
+	// rawCount=3: the DB returned 3 rows (partial page, all matching filter).
+	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, rawCount: 3})
 	m = next.(Model)
 
 	// Cursor should advance into the new page.
@@ -92,7 +95,7 @@ func TestObsLoadMore_WindowRemainsValid(t *testing.T) {
 	m.obsPageSize = 5
 
 	newPage := makeObsPage(6, 5, "decision")
-	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, nextOffset: 5})
+	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, rawCount: 5})
 	m = next.(Model)
 
 	visible := m.listVisibleHeight(true, false)
@@ -326,14 +329,177 @@ func TestObsFilter_LoadMorePageOffsetTracked(t *testing.T) {
 	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 0)
 	m.obsPageSize = 5
 	m.obsTypeFilter = "decision"
-	m.obsOffset2 = 0
+	m.obsOffset2 = 5 // first page of 5 raw rows was already fetched
 
-	// Simulate a load-more completing (e.g. after pressing j on last row).
+	// Simulate a load-more completing with 5 raw rows (all matching filter).
 	newPage := makeObsPage(6, 5, "decision")
-	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, nextOffset: 10})
+	next, _ := m.Update(obsLoadMoreMsg{observations: newPage, rawCount: 5})
 	m = next.(Model)
 
 	if m.obsOffset2 != 10 {
-		t.Errorf("after load-more, obsOffset2 = %d, want 10", m.obsOffset2)
+		t.Errorf("after load-more, obsOffset2 = %d, want 10 (prev 5 + rawCount 5)", m.obsOffset2)
+	}
+}
+
+// ─── Fix 1: obsExhausted stops infinite load-more when filter empties full pages ─
+
+// TestObsExhausted_SetWhenShortRawPage asserts that receiving a rawCount < obsPageSize
+// in obsLoadMoreMsg marks the model as exhausted.
+func TestObsExhausted_SetWhenShortRawPage(t *testing.T) {
+	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 4)
+	m.obsPageSize = 5
+
+	// rawCount=3 < obsPageSize=5 → DB has no more rows; model should be exhausted.
+	next, _ := m.Update(obsLoadMoreMsg{observations: makeObsPage(6, 3, "decision"), rawCount: 3})
+	m = next.(Model)
+
+	if !m.obsExhausted {
+		t.Error("obsExhausted should be true when rawCount < obsPageSize")
+	}
+}
+
+// TestObsExhausted_NotSetWhenFullRawPage asserts that a full raw page does NOT
+// mark the model exhausted (there may be more data).
+func TestObsExhausted_NotSetWhenFullRawPage(t *testing.T) {
+	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 4)
+	m.obsPageSize = 5
+
+	// rawCount == obsPageSize → DB may have more rows; not exhausted.
+	next, _ := m.Update(obsLoadMoreMsg{observations: makeObsPage(6, 5, "decision"), rawCount: 5})
+	m = next.(Model)
+
+	if m.obsExhausted {
+		t.Error("obsExhausted should be false when rawCount == obsPageSize")
+	}
+}
+
+// TestObsExhausted_ResetOnFreshLoad asserts that observationsLoadedMsg (fresh page 0)
+// clears obsExhausted so subsequent j-presses can trigger load-more again.
+func TestObsExhausted_ResetOnFreshLoad(t *testing.T) {
+	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 0)
+	m.obsExhausted = true // pre-set exhausted
+
+	next, _ := m.Update(observationsLoadedMsg{
+		observations: makeObsPage(1, 5, "decision"),
+		rawCount:     5,
+		project:      "testproject",
+	})
+	m = next.(Model)
+
+	if m.obsExhausted {
+		t.Error("obsExhausted should be reset to false on fresh observationsLoadedMsg")
+	}
+}
+
+// TestShouldLoadMore_FalseWhenExhausted asserts that shouldLoadMore returns false
+// when obsExhausted is true, even if the visible count is a multiple of obsPageSize.
+func TestShouldLoadMore_FalseWhenExhausted(t *testing.T) {
+	// 5 filtered rows with pageSize 5 → would normally trigger load-more.
+	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 4)
+	m.obsPageSize = 5
+	m.obsExhausted = true
+
+	if m.shouldLoadMore() {
+		t.Error("shouldLoadMore should return false when obsExhausted=true")
+	}
+}
+
+// TestShouldLoadMore_FalseWhenLoading asserts that shouldLoadMore returns false
+// while a fetch is already in flight.
+func TestShouldLoadMore_FalseWhenLoading(t *testing.T) {
+	m := obsViewModelAt80x24(makeObsPage(1, 5, "decision"), 4)
+	m.obsPageSize = 5
+	m.obsLoading = true
+
+	if m.shouldLoadMore() {
+		t.Error("shouldLoadMore should return false when obsLoading=true")
+	}
+}
+
+// TestObsInfiniteLoop_FullPageFilteredToZero simulates the infinite-fetch scenario:
+// a full raw page of "architecture" observations filtered by "decision" produces
+// 0 visible rows. The next page is short (exhausting the DB).
+// After receiving the short page, pressing j must NOT trigger another load-more.
+func TestObsInfiniteLoop_FullPageFilteredToZero(t *testing.T) {
+	m := newModel()
+	m = setSize(m, 80, 24)
+	m.view = viewObservations
+	m.selectedProject = "testproject"
+	m.obsPageSize = 5
+	m.obsTypeFilter = "decision"
+
+	// Fresh page 0: 5 raw rows fetched but 0 match the filter.
+	// rawCount=5 (full page) so not exhausted yet.
+	next, _ := m.Update(observationsLoadedMsg{
+		observations: []store.Observation{}, // 0 filtered rows
+		rawCount:     5,
+		project:      "testproject",
+	})
+	m = next.(Model)
+
+	if m.obsExhausted {
+		t.Fatal("after full raw page with 0 filtered rows, obsExhausted should still be false (may have more)")
+	}
+
+	// Load-more completes: short raw page (DB exhausted).
+	next, _ = m.Update(obsLoadMoreMsg{
+		observations: []store.Observation{}, // 0 filtered rows from short page
+		rawCount:     2,                     // < obsPageSize=5 → exhausted
+	})
+	m = next.(Model)
+
+	if !m.obsExhausted {
+		t.Fatal("after short raw page, obsExhausted should be true")
+	}
+
+	// Now press j: shouldLoadMore must return false, no new cmd issued.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if cmd != nil {
+		t.Error("after obsExhausted=true, j-press should issue no load-more cmd")
+	}
+}
+
+// ─── Fix 2: OFFSET must advance by rawCount, not filtered count ──────────────
+
+// TestObsOffset_AdvancesByRawCountOnFreshLoad asserts that after observationsLoadedMsg,
+// obsOffset2 equals rawCount (not len(filtered observations)).
+func TestObsOffset_AdvancesByRawCountOnFreshLoad(t *testing.T) {
+	m := obsViewModelAt80x24(nil, 0)
+	m.obsPageSize = 50
+
+	// 50 raw rows fetched; filter kept only 10.
+	filtered := makeObsPage(1, 10, "decision")
+	next, _ := m.Update(observationsLoadedMsg{
+		observations: filtered,
+		rawCount:     50,
+		project:      "testproject",
+	})
+	m = next.(Model)
+
+	if m.obsOffset2 != 50 {
+		t.Errorf("obsOffset2 after fresh load = %d, want 50 (rawCount), not %d (filtered count)",
+			m.obsOffset2, len(filtered))
+	}
+}
+
+// TestObsOffset_AdvancesByRawCountOnLoadMore asserts that after obsLoadMoreMsg,
+// obsOffset2 advances by rawCount (not by filtered count) so the next DB query
+// uses the correct SQL OFFSET.
+func TestObsOffset_AdvancesByRawCountOnLoadMore(t *testing.T) {
+	m := obsViewModelAt80x24(makeObsPage(1, 10, "decision"), 9)
+	m.obsPageSize = 50
+	m.obsOffset2 = 50 // already fetched 50 raw rows
+
+	// Next page: 50 raw rows fetched; filter keeps only 3.
+	filtered := makeObsPage(51, 3, "decision")
+	next, _ := m.Update(obsLoadMoreMsg{
+		observations: filtered,
+		rawCount:     50,
+	})
+	m = next.(Model)
+
+	if m.obsOffset2 != 100 {
+		t.Errorf("obsOffset2 after load-more = %d, want 100 (prev 50 + rawCount 50), not %d",
+			m.obsOffset2, 50+len(filtered))
 	}
 }

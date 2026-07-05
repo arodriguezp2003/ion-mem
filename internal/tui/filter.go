@@ -31,6 +31,9 @@ type obsLoadMoreMsg struct {
 	observations []store.Observation
 	// nextOffset is the offset to use for the NEXT load-more request.
 	nextOffset int
+	// rawCount is the number of rows returned by the DB before client-side
+	// type filtering. Used to detect DB exhaustion (rawCount < obsPageSize).
+	rawCount int
 }
 
 // ─── model fields (added to Model struct) ────────────────────────────────────
@@ -66,6 +69,7 @@ func (m Model) fetchObservationsFiltered() tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
+		rawCount := len(obs)
 		// Apply type filter client-side (store.RecentObservations has no Type param).
 		if typeFilter != "" {
 			filtered := obs[:0]
@@ -76,7 +80,7 @@ func (m Model) fetchObservationsFiltered() tea.Cmd {
 			}
 			obs = filtered
 		}
-		return observationsLoadedMsg{observations: obs, project: project}
+		return observationsLoadedMsg{observations: obs, rawCount: rawCount, project: project}
 	}
 }
 
@@ -103,6 +107,7 @@ func (m Model) fetchMoreObservations() tea.Cmd {
 		if err != nil {
 			return errMsg{err}
 		}
+		rawCount := len(obs)
 		// Apply type filter client-side.
 		if typeFilter != "" {
 			filtered := obs[:0]
@@ -113,16 +118,19 @@ func (m Model) fetchMoreObservations() tea.Cmd {
 			}
 			obs = filtered
 		}
-		return obsLoadMoreMsg{observations: obs, nextOffset: offset + pageSize}
+		return obsLoadMoreMsg{observations: obs, rawCount: rawCount, nextOffset: offset + pageSize}
 	}
 }
 
 // ─── update handler helpers ──────────────────────────────────────────────────
 
-// shouldLoadMore returns true when the cursor is at the last row and the last
-// fetch returned a full page (indicating there may be more data).
+// shouldLoadMore returns true when the cursor is at the last row and the DB
+// may have more rows (i.e. not exhausted and not already loading).
 func (m Model) shouldLoadMore() bool {
 	if m.obsLoading {
+		return false
+	}
+	if m.obsExhausted {
 		return false
 	}
 	if m.obsPageSize <= 0 {

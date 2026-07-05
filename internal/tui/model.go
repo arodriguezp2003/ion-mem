@@ -74,6 +74,9 @@ type projectsLoadedMsg struct {
 type observationsLoadedMsg struct {
 	observations []store.Observation
 	project      string
+	// rawCount is the number of rows returned by the DB before client-side
+	// type filtering. Used to set the correct SQL OFFSET for the next page.
+	rawCount int
 }
 
 // searchResultMsg is sent when a search completes (BM25 or hybrid).
@@ -360,6 +363,7 @@ type Model struct {
 	obsPageSize   int    // page size; 0 = use obsDefaultPageSize
 	obsOffset2    int    // SQL OFFSET for next load-more (page-based)
 	obsLoading    bool   // true while a load-more fetch is in flight
+	obsExhausted  bool   // true when the last raw page was short (DB has no more rows)
 	obsTypeFilter string // active type filter; "" = ALL
 
 	// Search (per-project observations view).
@@ -662,20 +666,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.obsCursor = 0
 		}
 		m.obsOffset = 0
-		// Reset pagination state: offset2 is the length of the first page (for load-more).
-		pageSize := m.obsPageSize
-		if pageSize <= 0 {
-			pageSize = obsDefaultPageSize
-		}
-		m.obsOffset2 = len(msg.observations)
+		// Advance offset by raw page size so the next DB query uses the correct OFFSET
+		// regardless of how many rows the client-side type filter kept.
+		m.obsOffset2 = msg.rawCount
 		m.obsLoading = false
+		m.obsExhausted = false // fresh load always resets exhaustion
 		m.confirmDelete = false
 		return m, nil
 
 	case obsLoadMoreMsg:
 		prevLen := len(m.observations)
 		m.observations = append(m.observations, msg.observations...)
-		m.obsOffset2 = msg.nextOffset
+		// Advance offset by raw page size so the next DB query uses the correct
+		// OFFSET regardless of how many rows the client-side type filter kept.
+		pageSize := m.obsPageSize
+		if pageSize <= 0 {
+			pageSize = obsDefaultPageSize
+		}
+		m.obsOffset2 += msg.rawCount
+		// Detect DB exhaustion: a raw page shorter than pageSize means no more rows.
+		if msg.rawCount < pageSize {
+			m.obsExhausted = true
+		}
 		m.obsLoading = false
 		// Advance cursor into the first row of the new page.
 		if len(msg.observations) > 0 {
