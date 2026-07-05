@@ -287,10 +287,11 @@ func TestRenderSmoke_ObservationsScrolledMidList(t *testing.T) {
 	lastLine := lines[len(lines)-1]
 	secondLast := lines[len(lines)-2]
 
-	if !strings.Contains(lastLine, "quit") && !strings.Contains(lastLine, "q quit") {
+	// Retro footer uses uppercase QUIT; status bar uses uppercase OBSERVATION(S).
+	if !strings.Contains(strings.ToUpper(lastLine), "QUIT") {
 		t.Errorf("last line does not look like footer hints, got: %q", lastLine)
 	}
-	if !strings.Contains(secondLast, "observation(s)") {
+	if !strings.Contains(strings.ToUpper(secondLast), "OBSERVATION") {
 		t.Errorf("second-to-last line does not look like status bar, got: %q", secondLast)
 	}
 }
@@ -310,9 +311,9 @@ func TestRenderSmoke_ProjectsView(t *testing.T) {
 
 	out := m.View()
 
-	// Must contain the brand.
-	if !strings.Contains(out, "ion-mem") {
-		t.Errorf("View() does not contain brand 'ion-mem'\noutput:\n%s", out)
+	// Must contain the retro brand ION//MEM.
+	if !strings.Contains(out, "ION//MEM") {
+		t.Errorf("View() does not contain retro brand 'ION//MEM'\noutput:\n%s", out)
 	}
 
 	// Must contain the selected project name.
@@ -341,13 +342,16 @@ func TestRenderSmoke_ProjectsView(t *testing.T) {
 	lastLine := lines[len(lines)-1]
 	secondLast := lines[len(lines)-2]
 
-	if !strings.Contains(firstLine, "ion-mem") {
-		t.Errorf("first line does not contain brand 'ion-mem', got: %q", firstLine)
+	// Retro brand is ION//MEM (uppercase).
+	if !strings.Contains(firstLine, "ION//MEM") {
+		t.Errorf("first line does not contain retro brand 'ION//MEM', got: %q", firstLine)
 	}
-	if !strings.Contains(lastLine, "quit") {
+	// Retro footer uses uppercase QUIT.
+	if !strings.Contains(strings.ToUpper(lastLine), "QUIT") {
 		t.Errorf("last line does not look like footer hints, got: %q", lastLine)
 	}
-	if !strings.Contains(secondLast, "project(s)") {
+	// Retro status bar uses uppercase PROJECT(S).
+	if !strings.Contains(strings.ToUpper(secondLast), "PROJECT") {
 		t.Errorf("second-to-last line does not look like status bar, got: %q", secondLast)
 	}
 }
@@ -391,10 +395,12 @@ func TestRenderSmoke_ProjectsTallTerminal(t *testing.T) {
 	if len(lines) < 2 {
 		t.Fatalf("View() fewer than 2 lines")
 	}
-	if !strings.Contains(lines[len(lines)-1], "quit") {
+	// Retro footer uses uppercase QUIT.
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-1]), "QUIT") {
 		t.Errorf("footer not on last line; got: %q", lines[len(lines)-1])
 	}
-	if !strings.Contains(lines[len(lines)-2], "project(s)") {
+	// Retro status bar uses uppercase PROJECT(S).
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-2]), "PROJECT") {
 		t.Errorf("status bar not on second-to-last line; got: %q", lines[len(lines)-2])
 	}
 }
@@ -429,17 +435,17 @@ func TestRenderSmoke_ProjectsShortTerminalNoLogo(t *testing.T) {
 		t.Errorf("short terminal: logo art found at h=%d but should be suppressed\noutput:\n%s", termH, out)
 	}
 
-	// Brand header must still be on first line.
+	// Brand header must still be on first line — retro brand is ION//MEM.
 	lines := viewLines(out)
-	if !strings.Contains(lines[0], "ion-mem") {
-		t.Errorf("brand not on first line at short terminal; got: %q", lines[0])
+	if !strings.Contains(lines[0], "ION//MEM") {
+		t.Errorf("retro brand not on first line at short terminal; got: %q", lines[0])
 	}
 
-	// Status bar on second-to-last; footer on last.
-	if !strings.Contains(lines[len(lines)-1], "quit") {
+	// Status bar on second-to-last; footer on last — retro uppercase.
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-1]), "QUIT") {
 		t.Errorf("footer not on last line; got: %q", lines[len(lines)-1])
 	}
-	if !strings.Contains(lines[len(lines)-2], "project(s)") {
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-2]), "PROJECT") {
 		t.Errorf("status bar not on second-to-last line; got: %q", lines[len(lines)-2])
 	}
 }
@@ -522,12 +528,12 @@ func TestRenderSmoke_ObservationsViewWithSearchBar(t *testing.T) {
 		t.Errorf("observation title 'First obs' not found in output\noutput:\n%s", out)
 	}
 
-	// Status bar on second-to-last; footer on last.
+	// Status bar on second-to-last; footer on last — retro uppercase.
 	lines := viewLines(out)
-	if !strings.Contains(lines[len(lines)-1], "quit") {
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-1]), "QUIT") {
 		t.Errorf("footer not on last line; got: %q", lines[len(lines)-1])
 	}
-	if !strings.Contains(lines[len(lines)-2], "observation(s)") {
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-2]), "OBSERVATION") {
 		t.Errorf("status bar not on second-to-last line; got: %q", lines[len(lines)-2])
 	}
 }
@@ -562,21 +568,21 @@ func TestRenderSmoke_ShortListPadsToFullHeight(t *testing.T) {
 
 	lines := viewLines(out)
 
-	// Footer is on the last line (line 24).
+	// Footer is on the last line (line 24) — retro uppercase QUIT.
 	lastLine := lines[len(lines)-1]
-	if !strings.Contains(lastLine, "quit") {
+	if !strings.Contains(strings.ToUpper(lastLine), "QUIT") {
 		t.Errorf("footer not on last line; last line = %q", lastLine)
 	}
 
-	// Status bar is on the second-to-last line (line 23).
+	// Status bar is on the second-to-last line (line 23) — retro uppercase PROJECT(S).
 	secondLast := lines[len(lines)-2]
-	if !strings.Contains(secondLast, "project(s)") {
+	if !strings.Contains(strings.ToUpper(secondLast), "PROJECT") {
 		t.Errorf("status bar not on second-to-last line; got %q", secondLast)
 	}
 
-	// Header is on the first line.
-	if !strings.Contains(lines[0], "ion-mem") {
-		t.Errorf("header not on first line; got %q", lines[0])
+	// Header is on the first line — retro brand ION//MEM.
+	if !strings.Contains(lines[0], "ION//MEM") {
+		t.Errorf("retro brand not on first line; got %q", lines[0])
 	}
 
 	// There must be at least one blank padding line between the list content

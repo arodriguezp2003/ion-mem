@@ -12,25 +12,6 @@ import (
 	"github.com/ionix/ion-mem/internal/store"
 )
 
-// stripAnsiCodes removes ANSI escape sequences from s, returning the plain text.
-func stripAnsiCodes(s string) string {
-	var b strings.Builder
-	i := 0
-	for i < len(s) {
-		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
-			i += 2
-			for i < len(s) && s[i] != 'm' {
-				i++
-			}
-			i++ // skip 'm'
-		} else {
-			b.WriteByte(s[i])
-			i++
-		}
-	}
-	return b.String()
-}
-
 // makeTwoProjects returns two project summaries for wide-terminal tests.
 func makeTwoProjects() []store.ProjectSummary {
 	return []store.ProjectSummary{
@@ -118,16 +99,16 @@ func TestWide_ExactFill_200x55(t *testing.T) {
 		t.Fatal("fewer than 2 lines, cannot check chrome")
 	}
 
-	// Header on first line.
-	if !strings.Contains(lines[0], "ion-mem") {
+	// Header on first line — retro brand is ION//MEM.
+	if !strings.Contains(lines[0], "ION//MEM") {
 		t.Errorf("header not on line 1: %q", lines[0])
 	}
-	// Status bar on second-to-last line.
-	if !strings.Contains(lines[len(lines)-2], "project(s)") {
+	// Status bar on second-to-last line — retro style PROJECT(S).
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-2]), "PROJECT") {
 		t.Errorf("status bar not on second-to-last line: %q", lines[len(lines)-2])
 	}
-	// Footer on last line.
-	if !strings.Contains(lines[len(lines)-1], "quit") {
+	// Footer on last line — retro BBS format uses uppercase QUIT.
+	if !strings.Contains(strings.ToUpper(lines[len(lines)-1]), "QUIT") {
 		t.Errorf("footer not on last line: %q", lines[len(lines)-1])
 	}
 }
@@ -280,10 +261,11 @@ func TestWide_BlankLineAfterTagline(t *testing.T) {
 	out := m.View()
 	lines := viewLines(out)
 
-	// Find tagline row.
+	// Find tagline row — retro style uses uppercase PERSISTENT MEMORY.
 	taglineIdx := -1
 	for i, l := range lines {
-		if strings.Contains(stripAnsiCodes(l), "Persistent memory") {
+		stripped := strings.ToUpper(stripAnsiCodes(l))
+		if strings.Contains(stripped, "PERSISTENT MEMORY") {
 			taglineIdx = i
 			break
 		}
@@ -513,20 +495,25 @@ func TestWide_DetailMetaCenteredAt200(t *testing.T) {
 	lines := viewLines(out)
 
 	// Find the horizontal rule row (a line that, after stripping leading/trailing
-	// spaces, consists entirely of "─" characters).
+	// spaces, consists entirely of "═" characters — the retro double-rule).
 	// Skip the first 2 chrome lines (header + separator) to avoid hitting the
-	// full-width separator bar, which also consists of "─".
+	// full-width separator bar, which also consists of "═".
+	// We find the SECOND "═"-only line (the first is the separator in chrome).
 	ruleIdx := -1
+	ruleCount := 0
 	for i := 2; i < len(lines); i++ {
 		plain := stripAnsiCodes(lines[i])
 		inner := strings.Trim(plain, " ")
-		if len(inner) > 0 && strings.TrimRight(inner, "─") == "" {
-			ruleIdx = i
-			break
+		if len(inner) > 0 && strings.TrimRight(inner, "═") == "" {
+			ruleCount++
+			if ruleCount == 1 {
+				ruleIdx = i
+				break
+			}
 		}
 	}
 	if ruleIdx < 0 {
-		t.Fatal("horizontal rule not found in viewDetail output (after header chrome)")
+		t.Fatal("double-rule ═ not found in viewDetail content area (after header chrome)")
 	}
 
 	ruleLine := stripAnsiCodes(lines[ruleIdx])

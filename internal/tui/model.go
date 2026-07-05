@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -61,33 +59,14 @@ type errMsg struct{ err error }
 
 // ─── key bindings ──────────────────────────────────────────────────────────────
 
-type keyMap struct {
-	Up     key.Binding
-	Down   key.Binding
-	Enter  key.Binding
-	Back   key.Binding
-	Quit   key.Binding
-	Search key.Binding
-	Delete key.Binding
-}
-
-var keys = keyMap{
-	Up:     key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-	Down:   key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
-	Back:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	Search: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-	Delete: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
-}
-
-func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Search, k.Delete, k.Quit}
-}
-
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{k.ShortHelp()}
-}
+// bbsFooter renders the BBS-style key legend. It is context-sensitive:
+// the observations and detail views include the Delete action.
+const (
+	bbsFooterBase   = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [ESC] BACK  [Q] QUIT"
+	bbsFooterDelete = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [D] DELETE  [ESC] BACK  [Q] QUIT"
+	bbsFooterDetail = "[↑↓] SCROLL  [D] DELETE  [ESC] BACK  [Q] QUIT"
+	bbsFooterSearch = "[⏎] SUBMIT  [ESC] CANCEL"
+)
 
 // ─── theme ────────────────────────────────────────────────────────────────────
 
@@ -99,6 +78,7 @@ type theme struct {
 	danger  lipgloss.AdaptiveColor
 	muted   lipgloss.AdaptiveColor
 	surface lipgloss.AdaptiveColor
+	amber   lipgloss.AdaptiveColor // warm secondary for bugfix badge
 }
 
 var defaultTheme = theme{
@@ -107,23 +87,41 @@ var defaultTheme = theme{
 	danger:  lipgloss.AdaptiveColor{Dark: "#FF5F87", Light: "#D00050"},
 	muted:   lipgloss.AdaptiveColor{Dark: "#444444", Light: "#BBBBBB"},
 	surface: lipgloss.AdaptiveColor{Dark: "#1C1C1C", Light: "#F5F5F5"},
+	amber:   lipgloss.AdaptiveColor{Dark: "#E8A000", Light: "#C07000"},
 }
 
-// badgeTints maps observation types to a subtle tinted background color.
-// All tints share the same purple-blue hue family — only brightness varies.
-// Text uses a near-white foreground so it reads on all tint levels.
-var badgeTints = map[string]string{
-	"decision":     "#3D2A7A", // deepest — most important type
-	"architecture": "#3A2E8A",
-	"bugfix":       "#2E3580",
-	"discovery":    "#2A3D7A",
-	"config":       "#253A72",
-	"preference":   "#22376B",
-	"manual":       "#1F3464",
-	// default (unknown types): falls through to badgeDefaultTint
+// badgeForegrounds maps observation types to foreground colors within the
+// accent family. Text rendered over the terminal default background.
+// [BUG  ] uses the warm amber secondary.
+var badgeForegrounds = map[string]lipgloss.TerminalColor{
+	"decision":        lipgloss.AdaptiveColor{Dark: "#BBA8FC", Light: "#5B33D9"},
+	"architecture":    lipgloss.AdaptiveColor{Dark: "#9B7CF8", Light: "#6A42D6"},
+	"bugfix":          defaultTheme.amber,
+	"discovery":       lipgloss.AdaptiveColor{Dark: "#7D56F4", Light: "#5B33D9"},
+	"config":          lipgloss.AdaptiveColor{Dark: "#6A42D6", Light: "#7D56F4"},
+	"preference":      lipgloss.AdaptiveColor{Dark: "#5B35C0", Light: "#9B7CF8"},
+	"pattern":         lipgloss.AdaptiveColor{Dark: "#8B6AF5", Light: "#4B2D9F"},
+	"session_summary": lipgloss.AdaptiveColor{Dark: "#A896FA", Light: "#4B2D9F"},
+	"manual":          lipgloss.AdaptiveColor{Dark: "#7D56F4", Light: "#5B33D9"},
 }
 
-const badgeDefaultTint = "#1C2E58"
+// badgeLabels maps type names to their 5-char uppercase BBS badge label.
+// The badge format is [XXXXX] — bracket + 5 chars + bracket = 7 chars visible.
+var badgeLabels = map[string]string{
+	"decision":        "DECID",
+	"architecture":    "ARCH ",
+	"bugfix":          "BUG  ",
+	"discovery":       "DISCO",
+	"config":          "CONF ",
+	"preference":      "PREF ",
+	"pattern":         "PATRN",
+	"session_summary": "SESSN",
+	"manual":          "NOTE ",
+}
+
+// badgeVisibleWidth is the total visible width of a rendered badge in columns.
+// Format: "[" + 5 label chars + "]" = 7 columns.
+const badgeVisibleWidth = 7
 
 // styles derived from defaultTheme. Built once at package init.
 var (
@@ -132,57 +130,68 @@ var (
 	mutedStyle = lipgloss.NewStyle().Foreground(defaultTheme.muted)
 	boldStyle  = lipgloss.NewStyle().Bold(true)
 
-	// Header bar: full-width, accent left brand, dim right breadcrumb.
+	// Header bar: brand left, accent bold uppercase.
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(defaultTheme.accent)
 
-	// Selected row: ▌ indicator + accent bold, no full-block inverse.
+	// Selected row: full-row inverse video — accent background, dark foreground.
+	// No ▌ glyph; the row background itself is the selection indicator.
 	selectedRowStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(defaultTheme.accent)
+				Background(defaultTheme.accent).
+				Foreground(lipgloss.AdaptiveColor{Dark: "#0A0010", Light: "#FFFFFF"})
 
-	// Status bar.
-	statusBarStyle = lipgloss.NewStyle().Foreground(defaultTheme.dim)
+	// Status bar: inverse-video strip across content width.
+	statusBarStyle = lipgloss.NewStyle().
+			Foreground(defaultTheme.dim)
 
-	// Fuzzy chip: accent background, dark text.
+	// Fuzzy chip: accent background, dark text — uppercase ~FUZZY.
 	fuzzyChipStyle = lipgloss.NewStyle().
 			Background(defaultTheme.accent).
 			Foreground(lipgloss.AdaptiveColor{Dark: "#F0ECFF", Light: "#FFFFFF"}).
 			Bold(true).
 			Padding(0, 1)
 
-	// Search bar border styles.
+	// Delete confirm.
+	confirmStyle = lipgloss.NewStyle().Foreground(defaultTheme.danger).Bold(true)
+
+	// Search bar double-border: accent when focused, muted when idle.
 	searchBarActiveStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
+				Border(lipgloss.DoubleBorder()).
 				BorderForeground(defaultTheme.accent).
 				Padding(0, 1)
 
 	searchBarIdleStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
+				Border(lipgloss.DoubleBorder()).
 				BorderForeground(defaultTheme.muted).
 				Padding(0, 1)
-
-	// Delete confirm.
-	confirmStyle = lipgloss.NewStyle().Foreground(defaultTheme.danger).Bold(true)
 )
 
-// renderBadge renders a fixed-width type badge with a per-type tinted background
-// and near-white text. The badge is padded/truncated to badgeInnerWidth characters.
-const badgeInnerWidth = 12 // visible characters inside the badge (excludes border spacing)
-
+// renderBadge renders a fixed-width type badge in the retro BBS format:
+// "[XXXXX]" — bracket + 5-char uppercase label + bracket.
+// Total visible width is always badgeVisibleWidth (7) characters.
+// Color is foreground-only (no background block) within the accent family.
 func renderBadge(typeName string) string {
-	bg, ok := badgeTints[typeName]
+	label, ok := badgeLabels[typeName]
 	if !ok {
-		bg = badgeDefaultTint
+		// Unknown type: use first 5 chars of name uppercased, padded to 5.
+		l := strings.ToUpper(typeName)
+		if len(l) > 5 {
+			l = l[:5]
+		} else {
+			l = fmt.Sprintf("%-5s", l)
+		}
+		label = l
 	}
-	label := truncStr(typeName, badgeInnerWidth)
-	label = fmt.Sprintf("%-*s", badgeInnerWidth, label)
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color(bg)).
-		Foreground(lipgloss.AdaptiveColor{Dark: "#DDD6FE", Light: "#F5F3FF"}).
-		Bold(true).
-		Render(label)
+	fg, hasFG := badgeForegrounds[typeName]
+	var inner string
+	if hasFG {
+		inner = lipgloss.NewStyle().Foreground(fg).Bold(true).Render(label)
+	} else {
+		inner = lipgloss.NewStyle().Foreground(defaultTheme.accent).Bold(true).Render(label)
+	}
+	return "[" + inner + "]"
 }
 
 // ─── layout constants ─────────────────────────────────────────────────────────
@@ -196,7 +205,7 @@ const (
 	// into the content area to pin chrome to the terminal bottom.
 	statusRows = 2
 	// searchBarRows is the number of content-area lines consumed by the
-	// persistent search bar (border top + content + border bottom).
+	// persistent search bar (double-border top + content + border bottom).
 	searchBarRows = 3
 	// minVisibleRows is the minimum number of list rows to show.
 	minVisibleRows = 1
@@ -281,7 +290,6 @@ type Model struct {
 	confirmDelete bool
 
 	// UI components.
-	help   help.Model
 	status string
 	err    error
 }
@@ -295,7 +303,6 @@ func newModel() Model {
 
 	return Model{
 		searchInput: ti,
-		help:        help.New(),
 		view:        viewProjects,
 		version:     "dev",
 	}
@@ -503,7 +510,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// When in search input mode (observations view), handle Enter/Esc specially.
 	if m.searching && m.view == viewObservations {
 		switch {
-		case key.Matches(msg, keys.Back):
+		case msg.Type == tea.KeyEsc:
 			m.searching = false
 			m.searchQuery = ""
 			m.fuzzyResults = false
@@ -526,7 +533,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global search input mode (projects view '/' → cross-project search).
 	if m.globalSearching {
 		switch {
-		case key.Matches(msg, keys.Back):
+		case msg.Type == tea.KeyEsc:
 			m.globalSearching = false
 			m.globalQuery = ""
 			m.searchInput.Reset()
@@ -559,7 +566,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'n':
 			m.confirmDelete = false
 			return m, nil
-		case key.Matches(msg, keys.Back):
+		case msg.Type == tea.KeyEsc:
 			m.confirmDelete = false
 			return m, nil
 		}
@@ -581,19 +588,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, keys.Quit):
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && (msg.Runes[0] == 'q') || msg.Type == tea.KeyCtrlC:
 		return m, tea.Quit
-	case key.Matches(msg, keys.Up):
+	case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'k'):
 		if m.projectCursor > 0 {
 			m.projectCursor--
 			m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
 		}
-	case key.Matches(msg, keys.Down):
+	case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'j'):
 		if m.projectCursor < len(m.projects)-1 {
 			m.projectCursor++
 			m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
 		}
-	case key.Matches(msg, keys.Enter):
+	case msg.Type == tea.KeyEnter:
 		if len(m.projects) == 0 {
 			return m, nil
 		}
@@ -616,22 +623,22 @@ func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, keys.Back):
+	case msg.Type == tea.KeyEsc:
 		m.view = viewProjects
 		m.searching = false
 		m.searchQuery = ""
 		m.fuzzyResults = false
-	case key.Matches(msg, keys.Up):
+	case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'k'):
 		if m.obsCursor > 0 {
 			m.obsCursor--
 			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
 		}
-	case key.Matches(msg, keys.Down):
+	case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'j'):
 		if m.obsCursor < len(m.observations)-1 {
 			m.obsCursor++
 			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
 		}
-	case key.Matches(msg, keys.Enter):
+	case msg.Type == tea.KeyEnter:
 		if len(m.observations) == 0 {
 			return m, nil
 		}
@@ -647,10 +654,10 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == '/':
 		m.searching = true
 		m.searchInput.Reset()
-		m.searchInput.Placeholder = "Search memories… (press /)"
+		m.searchInput.Placeholder = "Search memories…"
 		m.searchInput.Focus()
 		return m, textinput.Blink
-	case key.Matches(msg, keys.Delete):
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'd':
 		if len(m.observations) > 0 {
 			m.confirmDelete = true
 		}
@@ -660,24 +667,24 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, keys.Back):
+	case msg.Type == tea.KeyEsc:
 		m.view = viewProjects
 		m.globalQuery = ""
 		m.fuzzyResults = false
 		m.observations = nil
 		m.obsCursor = 0
 		m.obsOffset = 0
-	case key.Matches(msg, keys.Up):
+	case msg.Type == tea.KeyUp || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'k'):
 		if m.obsCursor > 0 {
 			m.obsCursor--
 			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(false, false), len(m.observations))
 		}
-	case key.Matches(msg, keys.Down):
+	case msg.Type == tea.KeyDown || (msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'j'):
 		if m.obsCursor < len(m.observations)-1 {
 			m.obsCursor++
 			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(false, false), len(m.observations))
 		}
-	case key.Matches(msg, keys.Enter):
+	case msg.Type == tea.KeyEnter:
 		if len(m.observations) == 0 {
 			return m, nil
 		}
@@ -696,10 +703,10 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleKeyDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, keys.Back):
+	case msg.Type == tea.KeyEsc:
 		m.view = viewObservations
 		m.selectedObs = nil
-	case key.Matches(msg, keys.Delete):
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'd':
 		if m.selectedObs != nil {
 			m.confirmDelete = true
 		}
@@ -728,12 +735,13 @@ func (m Model) View() string {
 	return ""
 }
 
-// renderHeader renders the branded top bar. Left side: "ion-mem vX.Y.Z",
-// right side: breadcrumb with rightPad columns of right margin.
+// renderHeader renders the retro-branded top bar.
+// Left side: "ION//MEM vX.Y.Z" (accent bold).
+// Right side: uppercase breadcrumb with rightPad columns of right margin.
 // Width-aware when m.width > 0.
 func (m Model) renderHeader(breadcrumb string) string {
-	brand := headerStyle.Render("ion-mem") + " " + dimStyle.Render(m.version)
-	right := dimStyle.Render(breadcrumb)
+	brand := headerStyle.Render("ION//MEM") + " " + dimStyle.Render(m.version)
+	right := dimStyle.Render(strings.ToUpper(breadcrumb))
 
 	if m.width > 0 {
 		brandLen := lipgloss.Width(brand)
@@ -747,9 +755,19 @@ func (m Model) renderHeader(breadcrumb string) string {
 	return brand + "  " + right
 }
 
+// renderSeparator renders a full-width double-rule separator in muted style.
+// Uses ═ (double horizontal box-drawing) as the retro CRT divider.
+func (m Model) renderSeparator() string {
+	w := m.width
+	if w < 1 {
+		w = 40
+	}
+	return mutedStyle.Render(strings.Repeat("═", w))
+}
+
 // renderLogoHero renders the ION MEM ASCII logo with a vertical gradient and
-// a dim tagline. Returns a string with exactly logoHeight lines (each
-// terminated by "\n"). Callers must subtract logoHeight from the content budget.
+// a retro-styled dim tagline. Returns a string with exactly logoHeight lines
+// (each terminated by "\n"). Callers must subtract logoHeight from the content budget.
 func (m Model) renderLogoHero(version string) string {
 	var sb strings.Builder
 
@@ -786,8 +804,9 @@ func (m Model) renderLogoHero(version string) string {
 		sb.WriteString(strings.Repeat(" ", offset+pad) + styled + "\n")
 	}
 
-	// Tagline line (1 line) — centred within the content block.
-	tagline := dimStyle.Render("Persistent memory for AI coding agents — " + version)
+	// Tagline line (1 line) — retro style with ── decorators, centred within the content block.
+	tagText := "── PERSISTENT MEMORY FOR AI CODING AGENTS ──"
+	tagline := dimStyle.Render(tagText)
 	tagRaw := lipgloss.Width(tagline)
 	tagPad := (w - tagRaw) / 2
 	if tagPad < 0 {
@@ -795,32 +814,40 @@ func (m Model) renderLogoHero(version string) string {
 	}
 	sb.WriteString(strings.Repeat(" ", offset+tagPad) + tagline + "\n")
 
-	// Blank spacer between tagline and the first list row (Bug 3 fix).
+	// Blank spacer between tagline and the first list row.
 	sb.WriteString("\n")
 
 	return sb.String()
 }
 
-// renderSearchBar renders the persistent styled search bar for the observations view.
+// renderSearchBar renders the retro double-border search bar for the observations view.
 // It returns a string with exactly searchBarRows lines (each terminated by "\n").
-// When focused (searching=true), the border is accent-colored and shows live input.
-// When idle, the border is muted and shows a dim placeholder prompt.
+//
+// Design: double-border box (╔ ═ ╗ / ║ / ╚ ═ ╝) with the title "SEARCH" embedded
+// in the top border. When focused, the border is accent-colored.
 //
 // cOffset is the centering left-indent (0 on narrow terminals); cWidth is the
 // effective column budget (≤ contentMaxWidth).
+//
+// Bug fix: cOffset must be applied ONCE — to the rendered box — not inside
+// the box width calculation. Previously the style's Width() accidentally
+// double-counted the offset by using cWidth which already excluded the margin.
 func (m Model) renderSearchBar(cOffset, cWidth int) string {
 	if cWidth < 20 {
 		cWidth = 20
 	}
-	// Inner width: effective content width minus border (2 cols) minus padding (2 each side = 4).
-	innerW := cWidth - 6
+	// Inner width: effective content width minus double-border (2 cols) minus padding (1 each side = 2).
+	// DoubleBorder adds 1 char each side for the border itself.
+	// Padding(0, 1) adds 1 space each side inside the border.
+	// Total overhead: 2 (border) + 2 (padding) = 4 cols.
+	innerW := cWidth - 4
 	if innerW < 5 {
 		innerW = 5
 	}
 
 	var inner string
 	if m.searching {
-		// Live input — show "/" glyph + textinput.
+		// Live input — show "/" prompt + textinput.
 		prompt := headerStyle.Render("/") + " " + m.searchInput.View()
 		inner = prompt
 	} else if m.searchQuery != "" {
@@ -828,69 +855,49 @@ func (m Model) renderSearchBar(cOffset, cWidth int) string {
 		inner = dimStyle.Render("/") + " " + dimStyle.Render(m.searchQuery)
 	} else {
 		// Idle placeholder.
-		inner = dimStyle.Render("/ Search memories… (press /)")
+		inner = dimStyle.Render("/ Search memories…")
 	}
 
 	style := searchBarIdleStyle
 	if m.searching {
 		style = searchBarActiveStyle
 	}
-	// Render the box within the effective content width, then apply centering offset.
+
+	// Render the box at exactly innerW wide. The border is added by lipgloss
+	// around the inner area — so total box width = innerW + 4 (border + padding).
+	// Apply cOffset once by prepending spaces to the rendered box string.
 	rendered := style.Width(innerW).Render(inner)
-	return strings.Repeat(" ", cOffset) + rendered + "\n"
+
+	// The rendered box may be multiple lines (top border, content, bottom border).
+	// Prepend cOffset spaces to each line.
+	if cOffset > 0 {
+		indent := strings.Repeat(" ", cOffset)
+		lines := strings.Split(rendered, "\n")
+		for i, l := range lines {
+			lines[i] = indent + l
+		}
+		rendered = strings.Join(lines, "\n")
+	}
+
+	return rendered + "\n"
 }
 
-// renderSeparator renders a full-width horizontal rule in muted style.
-// This acts as the visual divider below the header bar.
-func (m Model) renderSeparator() string {
-	w := m.width
-	if w < 1 {
-		w = 40
-	}
-	return mutedStyle.Render(strings.Repeat("─", w))
-}
-
-// padContentArea returns a string that renders as exactly targetRows lines when
-// split on "\n". The input content may end with a newline or not.
-//
-// The caller composes the final view as:
-//
-//	padContentArea(content, rows) + "\n" + statusLine + "\n" + footerLine + "\n"
-//
-// so the return value must NOT carry a trailing newline — the caller's "\n"
-// after padContentArea becomes the last newline of the padded content region.
-//
-// Padding is computed as:
-//   - count lines already in content (each "\n" terminates one line)
-//   - if content does not end in "\n", the partial last chunk counts as one line
-//   - append blank lines until line count == targetRows
-//   - strip exactly one trailing "\n" so the caller's join "\n" re-terminates it
-func padContentArea(content string, targetRows int) string {
-	if targetRows <= 0 {
-		return strings.TrimSuffix(content, "\n")
-	}
-	// Each "\n" terminates a line.
-	n := strings.Count(content, "\n")
-	if content != "" && !strings.HasSuffix(content, "\n") {
-		// Last partial line has no terminating newline; it still occupies one row.
-		n++
-		// Normalise: give it a newline so the padding loop is uniform.
-		content += "\n"
-	}
-	// Append blank lines until we have targetRows terminated lines.
-	for n < targetRows {
-		content += "\n"
-		n++
-	}
-	// The caller appends "\n" after padContentArea (as the join character
-	// between padded content and statusLine), so strip the last "\n" here to
-	// avoid an off-by-one blank line.
-	return strings.TrimSuffix(content, "\n")
-}
-
-// renderFooter renders the key-hint footer in dim style.
+// renderFooter renders the BBS key-legend footer in dim style.
+// The hint text is context-sensitive based on the current view.
 func (m Model) renderFooter() string {
-	return mutedStyle.Render(m.help.ShortHelpView(keys.ShortHelp()))
+	var hint string
+	switch m.view {
+	case viewDetail:
+		hint = bbsFooterDetail
+	case viewObservations, viewGlobalSearch:
+		hint = bbsFooterDelete
+	default:
+		hint = bbsFooterBase
+	}
+	if m.searching || m.globalSearching {
+		hint = bbsFooterSearch
+	}
+	return dimStyle.Render(hint)
 }
 
 // positionIndicator returns "cursor+1/total" or empty when the list is empty.
@@ -934,26 +941,18 @@ func (m Model) viewProjects() string {
 	// Global search overlay: when '/' is pressed in projects view, render an
 	// accent search bar at the top of the content area (above the project list).
 	if m.globalSearching {
-		// Render input in the same styled box as the observations search bar.
-		innerW := cWidth - 6
-		if innerW < 5 {
-			innerW = 5
-		}
-		prompt := headerStyle.Render("/") + " " + m.searchInput.View()
-		box := searchBarActiveStyle.Width(innerW).Render(prompt)
-		content.WriteString(strings.Repeat(" ", cOffset) + box + "\n")
+		content.WriteString(m.renderSearchBar(cOffset, cWidth))
 	}
 
 	rowIndent := strings.Repeat(" ", cOffset+leftPad) // indent for ordinary content rows
 
 	if len(m.projects) == 0 {
-		msg := dimStyle.Render("No projects yet — memories will appear as agents save them.")
+		emptyText := "░░ NO PROJECTS YET ░░"
+		emptyStyled := dimStyle.Render(emptyText)
 		if m.width > 0 {
-			msg = lipgloss.NewStyle().Width(cWidth).Align(lipgloss.Center).Foreground(defaultTheme.dim).Render(
-				"No projects yet — memories will appear as agents save them.",
-			)
+			emptyStyled = lipgloss.NewStyle().Width(cWidth).Align(lipgloss.Center).Foreground(defaultTheme.dim).Render(emptyText)
 		}
-		content.WriteString(strings.Repeat(" ", cOffset) + msg + "\n")
+		content.WriteString(strings.Repeat(" ", cOffset) + emptyStyled + "\n")
 	} else {
 		visible := m.listVisibleHeight(false, logo)
 		offset := m.projOffset
@@ -982,35 +981,35 @@ func (m Model) viewProjects() string {
 			// Right-align the activity column within the effective content width.
 			var row string
 			if m.width > 0 {
-				left := strings.Repeat(" ", cOffset+leftPad)
 				if i == m.projectCursor {
-					left = strings.Repeat(" ", cOffset) + selectedRowStyle.Render("▌") + " "
-				}
-				nameFmt := fmt.Sprintf("%-*s", nameWidth, name)
-				countsFmt := counts
-				// Gap fills the space between counts and the right-aligned activity
-				// column, calculated against the effective content width.
-				leftRaw := leftPad + nameWidth + 2 + len(counts) + 2
-				gap := cWidth - leftRaw - activityWidth - rightPad
-				if gap < 1 {
-					gap = 1
-				}
-				if i == m.projectCursor {
-					nameStr := selectedRowStyle.Render(nameFmt)
-					countsStr := boldStyle.Render(countsFmt)
-					actStr := dimStyle.Render(fmt.Sprintf("%-*s", activityWidth, activityStr))
-					row = left + nameStr + "  " + countsStr + strings.Repeat(" ", gap) + actStr
+					// Selected row: full inverse-video using selectedRowStyle.
+					// We render the entire row content with the selection style,
+					// padded to fill cWidth so the background covers the full row.
+					nameFmt := fmt.Sprintf("%-*s", nameWidth, name)
+					leftRaw := leftPad + nameWidth + 2 + len(counts) + 2
+					gap := cWidth - leftRaw - activityWidth - rightPad
+					if gap < 1 {
+						gap = 1
+					}
+					actStr := fmt.Sprintf("%-*s", activityWidth, activityStr)
+					rowContent := strings.Repeat(" ", leftPad) + nameFmt + "  " + counts + strings.Repeat(" ", gap) + actStr
+					row = strings.Repeat(" ", cOffset) + selectedRowStyle.Render(rowContent)
 				} else {
+					left := strings.Repeat(" ", cOffset+leftPad)
+					nameFmt := fmt.Sprintf("%-*s", nameWidth, name)
+					countsFmt := counts
+					leftRaw := leftPad + nameWidth + 2 + len(counts) + 2
+					gap := cWidth - leftRaw - activityWidth - rightPad
+					if gap < 1 {
+						gap = 1
+					}
 					actStr := dimStyle.Render(fmt.Sprintf("%-*s", activityWidth, activityStr))
 					row = left + nameFmt + "  " + countsFmt + strings.Repeat(" ", gap) + actStr
 				}
 			} else {
 				if i == m.projectCursor {
-					indicator := selectedRowStyle.Render("▌ ")
-					nameStr := selectedRowStyle.Render(fmt.Sprintf("%-*s", nameWidth, name))
-					countsStr := boldStyle.Render(counts)
-					actStr := dimStyle.Render(activityStr)
-					row = indicator + nameStr + "  " + countsStr + "  " + actStr
+					rowContent := strings.Repeat(" ", leftPad) + fmt.Sprintf("%-*s", nameWidth, name) + "  " + counts + "  " + activityStr
+					row = selectedRowStyle.Render(rowContent)
 				} else {
 					row = strings.Repeat(" ", leftPad) + fmt.Sprintf("%-*s", nameWidth, name) + "  " + counts + "  " + dimStyle.Render(activityStr)
 				}
@@ -1025,22 +1024,16 @@ func (m Model) viewProjects() string {
 
 	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.projectCursor, len(m.projects))
-	statusLeft := fmt.Sprintf("%d project(s)", len(m.projects))
+	statusLeft := fmt.Sprintf("ION-MEMORY // %d PROJECT(S)", len(m.projects))
 	if pos != "" {
 		statusLeft += "  " + pos
 	}
 	if m.err != nil {
-		statusLeft = "error: " + m.err.Error()
+		statusLeft = "ERROR: " + m.err.Error()
 	}
 	statusLine := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 
-	var footerHints []key.Binding
-	if m.globalSearching {
-		footerHints = []key.Binding{keys.Back, keys.Enter}
-	} else {
-		footerHints = keys.ShortHelp()
-	}
-	footerLine := strings.Repeat(" ", cOffset+leftPad) + mutedStyle.Render(m.help.ShortHelpView(footerHints))
+	footerLine := strings.Repeat(" ", cOffset+leftPad) + m.renderFooter()
 
 	// ── compose full-height layout ───────────────────────────────────────────
 	// Content area height = terminal height − header − separator − status − footer.
@@ -1059,7 +1052,7 @@ func (m Model) viewProjects() string {
 
 func (m Model) viewObservations() string {
 	// ── chrome ──────────────────────────────────────────────────────────────
-	breadcrumb := "Projects › " + m.selectedProject
+	breadcrumb := "Projects // " + m.selectedProject
 	header := m.renderHeader(breadcrumb)
 	separator := m.renderSeparator()
 
@@ -1081,9 +1074,9 @@ func (m Model) viewObservations() string {
 	if len(m.observations) == 0 {
 		var emptyMsg string
 		if m.searchQuery != "" {
-			emptyMsg = fmt.Sprintf("No results for %q.", m.searchQuery)
+			emptyMsg = fmt.Sprintf("░░ NO RESULTS FOR %q ░░", strings.ToUpper(m.searchQuery))
 		} else {
-			emptyMsg = "No observations yet."
+			emptyMsg = "░░ NO MEMORIES YET ░░"
 		}
 		content.WriteString(rowIndent + dimStyle.Render(emptyMsg) + "\n")
 	} else {
@@ -1096,10 +1089,10 @@ func (m Model) viewObservations() string {
 			content.WriteString(rowIndent + mutedStyle.Render("↑ more") + "\n")
 		}
 
-		// Badge: badgeInnerWidth chars of rendered content.
-		// The lipgloss badge adds background/foreground escape codes, so we use
-		// lipgloss.Width() for layout math rather than raw string length.
-		badgeRenderedWidth := badgeInnerWidth // visual columns consumed by badge (no border)
+		// Badge: badgeVisibleWidth chars of rendered content.
+		// The lipgloss badge adds foreground escape codes only, so we use
+		// badgeVisibleWidth for layout math (visual columns consumed by badge).
+		badgeRenderedWidth := badgeVisibleWidth
 		ageWidth := 10
 		titleWidth := 50
 		if cWidth > 40 {
@@ -1133,18 +1126,17 @@ func (m Model) viewObservations() string {
 				}
 				ageRendered := dimStyle.Render(ageStr)
 				if i == m.obsCursor {
-					indicator := strings.Repeat(" ", cOffset) + selectedRowStyle.Render("▌") + " "
-					titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(titleFmt)
-					row = indicator + badge + " " + titleStr + strings.Repeat(" ", gap) + ageRendered
+					// Selected row: full inverse-video, no ▌ glyph.
+					rowContent := strings.Repeat(" ", leftPad) + stripAnsiCodes(badge) + " " + titleFmt + strings.Repeat(" ", gap) + ageStr
+					row = strings.Repeat(" ", cOffset) + selectedRowStyle.Render(rowContent)
 				} else {
 					row = rowIndent + badge + " " + titleFmt + strings.Repeat(" ", gap) + ageRendered
 				}
 			} else {
 				age := dimStyle.Render(ageStr)
 				if i == m.obsCursor {
-					indicator := selectedRowStyle.Render("▌ ")
-					titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(fmt.Sprintf("%-*s", titleWidth, title))
-					row = indicator + badge + " " + titleStr + " " + age
+					rowContent := strings.Repeat(" ", leftPad) + stripAnsiCodes(badge) + " " + fmt.Sprintf("%-*s", titleWidth, title) + " " + ageStr
+					row = selectedRowStyle.Render(rowContent)
 				} else {
 					row = strings.Repeat(" ", leftPad) + badge + " " + fmt.Sprintf("%-*s", titleWidth, title) + " " + age
 				}
@@ -1163,18 +1155,18 @@ func (m Model) viewObservations() string {
 
 	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.obsCursor, len(m.observations))
-	statusLeft := m.selectedProject + " — " + fmt.Sprintf("%d observation(s)", len(m.observations))
+	statusLeft := strings.ToUpper(m.selectedProject) + " // " + fmt.Sprintf("%d OBSERVATION(S)", len(m.observations))
 	if pos != "" {
 		statusLeft += "  " + pos
 	}
 	if m.err != nil {
-		statusLeft = "error: " + m.err.Error()
+		statusLeft = "ERROR: " + m.err.Error()
 	}
 
 	// Build status line: left context + optional fuzzy chip right-aligned.
 	var statusLine string
 	if m.searchQuery != "" && m.fuzzyResults {
-		chip := fuzzyChipStyle.Render("~fuzzy")
+		chip := fuzzyChipStyle.Render("~FUZZY")
 		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
@@ -1214,7 +1206,7 @@ func (m Model) viewObservations() string {
 func (m Model) viewGlobalSearchResults() string {
 	query := m.globalQuery
 	// ── chrome ──────────────────────────────────────────────────────────────
-	breadcrumb := fmt.Sprintf(`Projects › search %q`, query)
+	breadcrumb := fmt.Sprintf(`Projects // Search "%s"`, query)
 	header := m.renderHeader(breadcrumb)
 	separator := m.renderSeparator()
 
@@ -1232,9 +1224,9 @@ func (m Model) viewGlobalSearchResults() string {
 	if len(m.observations) == 0 {
 		var emptyMsg string
 		if query != "" {
-			emptyMsg = fmt.Sprintf("No results for %q.", query)
+			emptyMsg = fmt.Sprintf("░░ NO RESULTS FOR %q ░░", strings.ToUpper(query))
 		} else {
-			emptyMsg = "No results."
+			emptyMsg = "░░ NO RESULTS ░░"
 		}
 		content.WriteString(rowIndent + dimStyle.Render(emptyMsg) + "\n")
 	} else {
@@ -1248,7 +1240,7 @@ func (m Model) viewGlobalSearchResults() string {
 		}
 
 		// Column layout: badge | title | project (dim) | age
-		badgeW := badgeInnerWidth
+		badgeW := badgeVisibleWidth
 		projColW := 14
 		ageWidth := 10
 		titleWidth := 30
@@ -1281,9 +1273,9 @@ func (m Model) viewGlobalSearchResults() string {
 			ageRendered := dimStyle.Render(ageStr)
 			var row string
 			if i == m.obsCursor {
-				indicator := strings.Repeat(" ", cOffset) + selectedRowStyle.Render("▌") + " "
-				titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(titleFmt)
-				row = indicator + badge + " " + titleStr + "  " + proj + strings.Repeat(" ", gap) + ageRendered
+				// Selected row: full inverse-video, no ▌ glyph.
+				rowContent := strings.Repeat(" ", leftPad) + stripAnsiCodes(badge) + " " + titleFmt + "  " + truncStr(obs.Project, projColW) + strings.Repeat(" ", gap) + ageStr
+				row = strings.Repeat(" ", cOffset) + selectedRowStyle.Render(rowContent)
 			} else {
 				row = rowIndent + badge + " " + titleFmt + "  " + proj + strings.Repeat(" ", gap) + ageRendered
 			}
@@ -1297,17 +1289,17 @@ func (m Model) viewGlobalSearchResults() string {
 
 	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.obsCursor, len(m.observations))
-	statusLeft := fmt.Sprintf("all projects — %d result(s)", len(m.observations))
+	statusLeft := fmt.Sprintf("ALL PROJECTS // %d RESULT(S)", len(m.observations))
 	if pos != "" {
 		statusLeft += "  " + pos
 	}
 	if m.err != nil {
-		statusLeft = "error: " + m.err.Error()
+		statusLeft = "ERROR: " + m.err.Error()
 	}
 
 	var statusLine string
 	if m.fuzzyResults {
-		chip := fuzzyChipStyle.Render("~fuzzy")
+		chip := fuzzyChipStyle.Render("~FUZZY")
 		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
@@ -1347,7 +1339,7 @@ func (m Model) viewDetail() string {
 	obs := m.selectedObs
 
 	// ── chrome ──────────────────────────────────────────────────────────────
-	breadcrumb := "Projects › " + m.selectedProject + " › detail"
+	breadcrumb := "Projects // " + m.selectedProject + " // Detail"
 	header := m.renderHeader(breadcrumb)
 	separator := m.renderSeparator()
 
@@ -1362,7 +1354,7 @@ func (m Model) viewDetail() string {
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
-	// Metadata block — label:value grid with dim labels.
+	// Metadata block — uppercase label grid with dim labels.
 	// Count lines precisely; viewport height is set in detailVPHeight().
 	labelStyle := lipgloss.NewStyle().Foreground(defaultTheme.dim).Width(10)
 
@@ -1370,42 +1362,56 @@ func (m Model) viewDetail() string {
 	content.WriteString(metaIndent + selectedRowStyle.Render(obs.Title) + "\n")
 
 	// Type + badge inline.
-	content.WriteString(metaIndent + labelStyle.Render("type") + renderBadge(obs.Type) + "\n")
+	content.WriteString(metaIndent + labelStyle.Render("TYPE") + renderBadge(obs.Type) + "\n")
 
 	// project / scope on same line.
-	content.WriteString(metaIndent + labelStyle.Render("project") + dimStyle.Render(obs.Project) + "   " + labelStyle.Render("scope") + dimStyle.Render(obs.Scope) + "\n")
+	content.WriteString(metaIndent + labelStyle.Render("PROJECT") + dimStyle.Render(obs.Project) + "   " + labelStyle.Render("SCOPE") + dimStyle.Render(obs.Scope) + "\n")
 
 	if obs.TopicKey != nil && *obs.TopicKey != "" {
-		content.WriteString(metaIndent + labelStyle.Render("topic_key") + dimStyle.Render(*obs.TopicKey) + "\n")
+		content.WriteString(metaIndent + labelStyle.Render("TOPIC") + dimStyle.Render(*obs.TopicKey) + "\n")
 	}
 	if obs.SyncID != "" {
-		content.WriteString(metaIndent + labelStyle.Render("sync_id") + mutedStyle.Render(obs.SyncID) + "\n")
+		content.WriteString(metaIndent + labelStyle.Render("SYNC_ID") + mutedStyle.Render(obs.SyncID) + "\n")
 	}
-	content.WriteString(metaIndent + labelStyle.Render("created") + dimStyle.Render(obs.CreatedAt) + "\n")
-	content.WriteString(metaIndent + labelStyle.Render("updated") + dimStyle.Render(obs.UpdatedAt) + "\n")
+	content.WriteString(metaIndent + labelStyle.Render("CREATED") + dimStyle.Render(obs.CreatedAt) + "\n")
+	content.WriteString(metaIndent + labelStyle.Render("UPDATED") + dimStyle.Render(obs.UpdatedAt) + "\n")
 
-	// Horizontal rule inside the content area, capped at effective content width.
+	// Double-rule separator between meta and body (═), capped at effective content width.
 	ruleWidth := cWidth
 	if ruleWidth < 1 {
 		ruleWidth = 40
 	}
-	content.WriteString(strings.Repeat(" ", cOffset) + mutedStyle.Render(strings.Repeat("─", ruleWidth)) + "\n")
+	content.WriteString(strings.Repeat(" ", cOffset) + mutedStyle.Render(strings.Repeat("═", ruleWidth)) + "\n")
 
-	content.WriteString(m.vp.View())
+	// Viewport body: the viewport renders content at vp.Width. On wide terminals
+	// we prepend cOffset spaces to each body line so the body aligns with the
+	// meta block (which uses cOffset+leftPad for labels).
+	vpContent := m.vp.View()
+	if cOffset > 0 && vpContent != "" {
+		indent := strings.Repeat(" ", cOffset)
+		bodyLines := strings.Split(vpContent, "\n")
+		for i, l := range bodyLines {
+			if l != "" {
+				bodyLines[i] = indent + l
+			}
+		}
+		vpContent = strings.Join(bodyLines, "\n")
+	}
+	content.WriteString(vpContent)
 
 	if m.confirmDelete {
 		content.WriteString("\n" + metaIndent + confirmStyle.Render("Delete this observation? y/n") + "\n")
 	}
 
 	// ── status and footer ────────────────────────────────────────────────────
-	statusText := fmt.Sprintf("observation #%d", obs.ID)
+	statusText := fmt.Sprintf("OBSERVATION #%d", obs.ID)
 	if m.vp.TotalLineCount() > 0 {
 		statusText += fmt.Sprintf("  %.0f%%", m.vp.ScrollPercent()*100)
 	} else {
-		statusText += "  scroll ↑↓"
+		statusText += "  SCROLL ↑↓"
 	}
 	if m.err != nil {
-		statusText = "error: " + m.err.Error()
+		statusText = "ERROR: " + m.err.Error()
 	}
 	statusLine := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusText)
 	footerLine := strings.Repeat(" ", cOffset+leftPad) + m.renderFooter()
@@ -1422,6 +1428,44 @@ func (m Model) viewDetail() string {
 		paddedContent + "\n" +
 		statusLine + "\n" +
 		footerLine + "\n"
+}
+
+// padContentArea returns a string that renders as exactly targetRows lines when
+// split on "\n". The input content may end with a newline or not.
+//
+// The caller composes the final view as:
+//
+//	padContentArea(content, rows) + "\n" + statusLine + "\n" + footerLine + "\n"
+//
+// so the return value must NOT carry a trailing newline — the caller's "\n"
+// after padContentArea becomes the last newline of the padded content region.
+//
+// Padding is computed as:
+//   - count lines already in content (each "\n" terminates one line)
+//   - if content does not end in "\n", the partial last chunk counts as one line
+//   - append blank lines until line count == targetRows
+//   - strip exactly one trailing "\n" so the caller's join "\n" re-terminates it
+func padContentArea(content string, targetRows int) string {
+	if targetRows <= 0 {
+		return strings.TrimSuffix(content, "\n")
+	}
+	// Each "\n" terminates a line.
+	n := strings.Count(content, "\n")
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		// Last partial line has no terminating newline; it still occupies one row.
+		n++
+		// Normalise: give it a newline so the padding loop is uniform.
+		content += "\n"
+	}
+	// Append blank lines until we have targetRows terminated lines.
+	for n < targetRows {
+		content += "\n"
+		n++
+	}
+	// The caller appends "\n" after padContentArea (as the join character
+	// between padded content and statusLine), so strip the last "\n" here to
+	// avoid an off-by-one blank line.
+	return strings.TrimSuffix(content, "\n")
 }
 
 // ─── commands ────────────────────────────────────────────────────────────────
@@ -1559,6 +1603,26 @@ func truncStr(s string, n int) string {
 		return ""
 	}
 	return s[:n-1] + "…"
+}
+
+// stripAnsiCodes removes ANSI escape sequences from s, returning the plain text.
+// This is a package-level helper used by both render functions and tests.
+func stripAnsiCodes(s string) string {
+	var b strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			i += 2
+			for i < len(s) && s[i] != 'm' {
+				i++
+			}
+			i++ // skip 'm'
+		} else {
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
 }
 
 func renderObservationDetail(obs store.Observation) string {
