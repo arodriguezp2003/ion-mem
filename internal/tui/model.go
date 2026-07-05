@@ -337,7 +337,7 @@ type Model struct {
 	width   int
 	height  int
 
-	view         viewState
+	view viewState
 	// previousView records the view state that opened the current detail view.
 	// Esc from detail restores this view so global-search context is preserved.
 	previousView viewState
