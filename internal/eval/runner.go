@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -86,20 +87,8 @@ func isUniqueErr(err error) bool {
 		return false
 	}
 	s := err.Error()
-	return containsAny(s, "UNIQUE constraint failed", "unique constraint")
-}
-
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return strings.Contains(s, "UNIQUE constraint failed") ||
+		strings.Contains(s, "unique constraint")
 }
 
 // Run executes each golden query against st for the given project, computes
@@ -118,15 +107,21 @@ func Run(ctx context.Context, st *store.Store, queries []GoldenQuery, project st
 		results, _, err := st.SearchWithFallback(ctx, store.SearchParams{
 			Q:       q.Query,
 			Project: project,
-			Limit:   k * 2, // fetch extra so k-truncation is meaningful
+			Limit:   k,
 		})
 		if err != nil {
 			return Report{}, fmt.Errorf("eval.Run query %q: %w", q.ID, err)
 		}
 
+		// Metrics are computed over exactly the top-k results so the
+		// expect_fail contract ("no expected title within k") holds and
+		// cannot flake when a doc drifts into ranks k+1..k*2.
 		got := make([]string, 0, len(results))
 		for _, res := range results {
 			got = append(got, res.Observation.Title)
+		}
+		if len(got) > k {
+			got = got[:k]
 		}
 
 		topHit := ""

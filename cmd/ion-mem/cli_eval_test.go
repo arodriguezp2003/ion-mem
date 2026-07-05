@@ -1,9 +1,22 @@
 package main
 
 import (
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// evalTestdataPath resolves the eval package's testdata fixtures from this
+// source file's location, so the test is independent of the working directory.
+func evalTestdataPath(t *testing.T, name string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Join(filepath.Dir(thisFile), "..", "..", "internal", "eval", "testdata", name)
+}
 
 // TestParseEvalFlags_corpusAndGolden verifies both required fields when
 // --corpus is provided.
@@ -81,8 +94,8 @@ func TestUsage_containsEval(t *testing.T) {
 func TestRunEval_withCorpus(t *testing.T) {
 	var sb strings.Builder
 	err := runEval([]string{
-		"--corpus=../../internal/eval/testdata/corpus.yaml",
-		"--golden=../../internal/eval/testdata/golden.yaml",
+		"--corpus=" + evalTestdataPath(t, "corpus.yaml"),
+		"--golden=" + evalTestdataPath(t, "golden.yaml"),
 		"--project=cli-test",
 		"--k=5",
 		"--data-dir=" + t.TempDir(),

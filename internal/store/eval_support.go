@@ -7,12 +7,16 @@ import (
 )
 
 // BackdateObservation sets last_seen_at and created_at on the observation
-// identified by id to approximately (now - days * 24h). It is intended for
-// test-support use only: the eval harness needs to simulate aging so that the
-// recency decay in SearchWithFallback applies realistically to corpus fixtures.
+// identified by id to approximately (now - days * 24h). It exists solely for
+// eval-corpus seeding (`ion-mem eval --corpus` and the eval regression tests),
+// which seed a TEMPORARY store and need to simulate aging so recency decay
+// applies realistically. Never call it against a real user store.
 //
 // Returns ErrObservationNotFound when id does not exist or is soft-deleted.
 func (s *Store) BackdateObservation(ctx context.Context, id int64, days int) error {
+	if days < 0 {
+		return fmt.Errorf("store.BackdateObservation: days must be >= 0, got %d", days)
+	}
 	// Verify existence.
 	var exists int
 	if err := s.db.QueryRowContext(ctx,
