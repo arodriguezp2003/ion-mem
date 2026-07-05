@@ -2,12 +2,18 @@
 //
 // Supports subcommands:
 //
-//	ion-mem mcp           [--profile=...] [--data-dir=...] [--project=...]
-//	ion-mem session-start --id=X --project=Y --cwd=Z [--data-dir=...]
-//	ion-mem session-end   --id=X [--summary=Y] [--data-dir=...]
-//	ion-mem context       --project=X [--scope=Y] [--data-dir=...]
-//	ion-mem save-prompt   --session-id=X --content=Y [--project=Z] [--data-dir=...]
-//	ion-mem search        <query> [--project=...] [--all-projects] [--limit=10] [--type=...] [--data-dir=...] [--json]
+//	ion-mem backup               [--out=<path>] [--data-dir=...]
+//	ion-mem config               get <key> | set <key> <value> | list [--data-dir=...]
+//	ion-mem context              --project=X [--scope=Y] [--data-dir=...]
+//	ion-mem export               [--out=<dir>] [--data-dir=...]
+//	ion-mem mcp                  [--profile=...] [--data-dir=...] [--project=...]
+//	ion-mem project              rename <old> <new> [--apply] [--data-dir=...]
+//	ion-mem prune                [--apply] [--prompt-days=N] [--deleted-days=N] [--data-dir=...]
+//	ion-mem save-prompt          --session-id=X --content=Y [--project=Z] [--data-dir=...]
+//	ion-mem search               <query> [--project=...] [--all-projects] [--limit=10] [--type=...] [--data-dir=...] [--json]
+//	ion-mem session-end          --id=X [--summary=Y] [--data-dir=...]
+//	ion-mem session-end          --all-stale [--older-than=24h] [--data-dir=...]
+//	ion-mem session-start        --id=X --project=Y --cwd=Z [--data-dir=...]
 //	ion-mem version
 //
 // The CLI is intentionally thin: the mcp subcommand opens the local store
@@ -25,6 +31,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/ionix/ion-mem/internal/mcp"
 	"github.com/ionix/ion-mem/internal/store"
@@ -125,18 +132,23 @@ func usage() string {
 Usage: ion-mem <command> [flags]
 
 Commands:
-  mcp                  Start the MCP stdio server (default for agent integrations).
-  dash                 Open the interactive TUI dashboard (requires a terminal).
-  session-start        Create a new session in the store.
-  session-end          Mark a session as ended.
+  backup               Create a compact backup of the store (VACUUM INTO).
+  backfill-embeddings  Embed all observations that lack a vector row (requires Ollama).
+  config               Read/write settings: get <key>, set <key> <value>, list.
   context              Print a markdown context summary for a project.
+  dash                 Open the interactive TUI dashboard (requires a terminal).
+  eval                 Run search quality evaluation against a golden query set.
+  export               Export all data to JSONL files with a manifest.
+  help                 Show this usage.
+  mcp                  Start the MCP stdio server (default for agent integrations).
+  project              Manage projects: rename <old> <new>.
+  prune                Remove old prompts and hard-delete soft-deleted observations.
   save-prompt          Record a user prompt for a session.
   search               One-shot search: ion-mem search <query> [--project=...] [--json].
+  session-end          Mark a session as ended (--all-stale to end all stale sessions).
+  session-start        Create a new session in the store.
   status               One-shot health snapshot: stats, recent items, alerts.
-  eval                 Run search quality evaluation against a golden query set.
-  backfill-embeddings  Embed all observations that lack a vector row (requires Ollama).
   version              Print the ion-mem version.
-  help                 Show this usage.
 
 Run "ion-mem <command> --help" for command-specific flags.
 
@@ -169,26 +181,36 @@ func routeCommand(argv []string, out io.Writer) error {
 	}
 	cmd := argv[1]
 	switch cmd {
-	case "mcp":
-		return runMCP(argv[2:])
-	case "dash":
-		return runDash(argv[2:])
-	case "session-start":
-		return runSessionStart(argv[2:])
-	case "session-end":
-		return runSessionEnd(argv[2:])
+	case "backup":
+		return runBackup(argv[2:], out)
+	case "backfill-embeddings":
+		return runBackfill(argv[2:], out)
+	case "config":
+		return runConfig(argv[2:], out)
 	case "context":
 		return runContext(argv[2:], out)
+	case "dash":
+		return runDash(argv[2:])
+	case "eval":
+		return runEval(argv[2:], out)
+	case "export":
+		return runExport(argv[2:], out)
+	case "mcp":
+		return runMCP(argv[2:])
+	case "project":
+		return runProject(argv[2:], out)
+	case "prune":
+		return runPrune(argv[2:], out)
 	case "save-prompt":
 		return runSavePrompt(argv[2:])
 	case "search":
 		return runSearch(argv[2:], out, os.Stderr)
+	case "session-end":
+		return runSessionEndWithOut(argv[2:], out)
+	case "session-start":
+		return runSessionStart(argv[2:])
 	case "status":
 		return runStatus(argv[2:], out)
-	case "eval":
-		return runEval(argv[2:], out)
-	case "backfill-embeddings":
-		return runBackfill(argv[2:], out)
 	case "version":
 		if out != nil {
 			fmt.Fprintln(out, versionString())
@@ -294,39 +316,50 @@ func isUniqueConstraintError(err error) bool {
 
 // sessionEndConfig collects the parsed flags for the `session-end` subcommand.
 type sessionEndConfig struct {
-	id      string
-	summary string
-	dataDir string
+	id        string
+	summary   string
+	dataDir   string
+	allStale  bool
+	olderThan time.Duration
 }
 
 // parseSessionEndFlags parses the `ion-mem session-end` flag set.
-// Returns an error when the required --id flag is missing.
+// Returns an error when neither --id nor --all-stale is provided.
 func parseSessionEndFlags(args []string, homeDir func() (string, error)) (sessionEndConfig, error) {
 	fs := flag.NewFlagSet("session-end", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	id := fs.String("id", "", "Session identifier (required).")
+	id := fs.String("id", "", "Session identifier (required unless --all-stale).")
 	summary := fs.String("summary", "", "Optional session summary.")
 	dataDir := fs.String("data-dir", defaultDataDir(homeDir), "Data directory for the SQLite store.")
+	allStale := fs.Bool("all-stale", false, "End all active sessions older than --older-than.")
+	olderThan := fs.Duration("older-than", 24*time.Hour, "Duration threshold for --all-stale (default: 24h).")
 
 	if err := fs.Parse(args); err != nil {
 		return sessionEndConfig{}, fmt.Errorf("ion-mem session-end: %w", err)
 	}
 
-	if *id == "" {
-		return sessionEndConfig{}, fmt.Errorf("ion-mem session-end: --id is required")
+	if !*allStale && *id == "" {
+		return sessionEndConfig{}, fmt.Errorf("ion-mem session-end: --id is required (or use --all-stale)")
 	}
 
 	return sessionEndConfig{
-		id:      *id,
-		summary: *summary,
-		dataDir: *dataDir,
+		id:        *id,
+		summary:   *summary,
+		dataDir:   *dataDir,
+		allStale:  *allStale,
+		olderThan: *olderThan,
 	}, nil
 }
 
-// runSessionEnd opens the store and marks a session as ended. Silently returns
-// 0 when the session does not exist (already ended or never created).
+// runSessionEnd opens the store and marks a session as ended. When --all-stale
+// is set, it ends every active session older than --older-than (default 24h).
+// Silently returns nil when a single session does not exist.
 func runSessionEnd(args []string) error {
+	return runSessionEndWithOut(args, os.Stdout)
+}
+
+func runSessionEndWithOut(args []string, out io.Writer) error {
 	cfg, err := parseSessionEndFlags(args, os.UserHomeDir)
 	if err != nil {
 		return err
@@ -338,7 +371,21 @@ func runSessionEnd(args []string) error {
 	}
 	defer st.Close()
 
-	err = st.EndSession(context.Background(), cfg.id, cfg.summary)
+	ctx := context.Background()
+
+	if cfg.allStale {
+		cutoff := time.Now().UTC().Add(-cfg.olderThan).Format(time.RFC3339)
+		n, err := st.EndStaleSessions(ctx, cutoff)
+		if err != nil {
+			return fmt.Errorf("end stale sessions: %w", err)
+		}
+		if out != nil {
+			fmt.Fprintf(out, "Ended %d stale session(s) (active for >%v)\n", n, cfg.olderThan)
+		}
+		return nil
+	}
+
+	err = st.EndSession(ctx, cfg.id, cfg.summary)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil // idempotent: already ended or never existed
