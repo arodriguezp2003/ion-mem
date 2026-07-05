@@ -193,9 +193,9 @@ func TestSearcher_HybridMode_SemanticDocRanked(t *testing.T) {
 
 	// Plant embedding for semanticID that is identical to the query vector.
 	// The query vector [0,1] will be the embed of "gopher".
-	queryVec := []float32{0.0, 1.0}     // what the embedder returns for "gopher"
-	semanticVec := []float32{0.0, 1.0}  // very close to query — high cosine similarity
-	lexicalVec := []float32{-1.0, 0.0}  // orthogonal to query — low cosine similarity
+	queryVec := []float32{0.0, 1.0}    // what the embedder returns for "gopher"
+	semanticVec := []float32{0.0, 1.0} // very close to query — high cosine similarity
+	lexicalVec := []float32{-1.0, 0.0} // orthogonal to query — low cosine similarity
 
 	if err := st.UpsertEmbedding(ctx, semanticID, "test-model", semanticVec); err != nil {
 		t.Fatalf("UpsertEmbedding semanticID: %v", err)
@@ -295,6 +295,69 @@ func TestNewSearcherFromSettings_EmbeddingsEnabled_FakeOllama(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Search with fake Ollama: %v", err)
+	}
+}
+
+// ─── VectorSearch model isolation in hybrid path ─────────────────────────────
+
+// TestSearcher_HybridMode_StaleModelVectorExcluded verifies that when the
+// embedder's Model() is "m1", a semantically-close document whose embedding
+// was stored under "m2" does NOT appear via the vector branch of hybrid search.
+func TestSearcher_HybridMode_StaleModelVectorExcluded(t *testing.T) {
+	ctx := context.Background()
+	st := mustOpenStore(t)
+	proj := "stale-model-proj"
+
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{
+		ID: "stale-sess", Project: proj, Directory: "/test",
+	})
+
+	// Seed a document that is semantically close to the query vector.
+	closeDoc, err := st.AddObservation(ctx, store.AddObservationParams{
+		SessionID: "stale-sess", Type: "manual",
+		Title: "semantically close doc", Content: "matching content xyz",
+		Project: proj, Scope: "project",
+	})
+	if err != nil {
+		t.Fatalf("AddObservation closeDoc: %v", err)
+	}
+
+	// Store its embedding under model "m2" (stale — embedder uses "m1").
+	queryVec := []float32{1.0, 0.0}
+	if err := st.UpsertEmbedding(ctx, closeDoc.ID, "m2", queryVec); err != nil {
+		t.Fatalf("UpsertEmbedding m2: %v", err)
+	}
+
+	// Fake embedder returns the same query vector but identifies as "m1".
+	embedder := &fakeEmbedder{
+		vectors: map[string][]float32{"query": queryVec},
+		model:   "m1",
+	}
+
+	searcher := hybrid.NewSearcher(st, embedder)
+	results, meta, err := searcher.Search(ctx, store.SearchParams{
+		Q: "query", Project: proj, Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	_ = meta
+
+	// closeDoc must NOT appear via the vector branch (wrong model).
+	// BM25 may or may not surface it — we only check vector-sourced promotion
+	// by ensuring the doc is absent when BM25 can't find "query" in its content.
+	for _, r := range results {
+		if r.Observation.ID == closeDoc.ID {
+			// If it appears only from BM25, Score/BM25 field will be non-zero from
+			// BM25 side. The important thing: the m2 vector must not have produced
+			// a VectorSearch hit. We can verify indirectly by confirming meta.Hybrid
+			// is true but the doc ranking is not boosted by vector — but the simplest
+			// observable invariant is that UpsertEmbedding under "m1" has zero rows,
+			// so VectorSearch("m1") returns nothing — any appearance is from BM25 only.
+			// Since "query" does not appear in closeDoc's title/content, BM25 won't
+			// find it either. So it must be absent.
+			t.Errorf("closeDoc (embedded under m2) appeared in results when embedder uses m1 — stale vector was not excluded")
+		}
 	}
 }
 

@@ -124,9 +124,11 @@ func (s *Searcher) Search(ctx context.Context, params store.SearchParams) ([]sto
 		return bm25Results, meta, nil
 	}
 
-	// Vector search (limit*2 candidates).
+	// Vector search (limit*2 candidates, filtered to the embedder's model so
+	// stale vectors from a different embedding space are excluded).
 	vecParams := params
 	vecParams.Limit = limit * 2
+	vecParams.Model = s.embeddr.Model()
 	vecResults, vecErr := s.store.VectorSearch(ctx, queryVec, vecParams)
 	if vecErr != nil {
 		// Fall back to BM25 on vector search error.

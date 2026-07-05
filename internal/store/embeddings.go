@@ -230,6 +230,10 @@ func (s *Store) VectorSearch(ctx context.Context, queryVec []float32, params Sea
 		WHERE o.deleted_at IS NULL`
 	args := []interface{}{}
 
+	if params.Model != "" {
+		query += " AND oe.model = ?"
+		args = append(args, params.Model)
+	}
 	if params.Project != "" {
 		query += " AND o.project = ?"
 		args = append(args, params.Project)

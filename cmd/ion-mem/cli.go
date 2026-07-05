@@ -124,16 +124,17 @@ func usage() string {
 Usage: ion-mem <command> [flags]
 
 Commands:
-  mcp            Start the MCP stdio server (default for agent integrations).
-  dash           Open the interactive TUI dashboard (requires a terminal).
-  session-start  Create a new session in the store.
-  session-end    Mark a session as ended.
-  context        Print a markdown context summary for a project.
-  save-prompt    Record a user prompt for a session.
-  status         One-shot health snapshot: stats, recent items, alerts.
-  eval           Run search quality evaluation against a golden query set.
-  version        Print the ion-mem version.
-  help           Show this usage.
+  mcp                  Start the MCP stdio server (default for agent integrations).
+  dash                 Open the interactive TUI dashboard (requires a terminal).
+  session-start        Create a new session in the store.
+  session-end          Mark a session as ended.
+  context              Print a markdown context summary for a project.
+  save-prompt          Record a user prompt for a session.
+  status               One-shot health snapshot: stats, recent items, alerts.
+  eval                 Run search quality evaluation against a golden query set.
+  backfill-embeddings  Embed all observations that lack a vector row (requires Ollama).
+  version              Print the ion-mem version.
+  help                 Show this usage.
 
 Run "ion-mem <command> --help" for command-specific flags.
 
@@ -182,6 +183,8 @@ func routeCommand(argv []string, out io.Writer) error {
 		return runStatus(argv[2:], out)
 	case "eval":
 		return runEval(argv[2:], out)
+	case "backfill-embeddings":
+		return runBackfill(argv[2:], out)
 	case "version":
 		if out != nil {
 			fmt.Fprintln(out, versionString())

@@ -378,3 +378,50 @@ func TestVectorSearch_ExcludesSoftDeleted(t *testing.T) {
 		}
 	}
 }
+
+// TestVectorSearch_FiltersByModel verifies that when SearchParams.Model is set,
+// VectorSearch only returns rows whose embedding model matches — stale vectors
+// from a different model must not appear.
+func TestVectorSearch_FiltersByModel(t *testing.T) {
+	ctx := context.Background()
+	st := mustOpen(t)
+	proj := "model-filter-proj"
+
+	// Two observations: one embedded with "model-a", one with "model-b".
+	idA := seedObsForEmbed(t, st, "obs-model-a", proj)
+	idB := seedObsForEmbed(t, st, "obs-model-b", proj)
+
+	vecA := []float32{1.0, 0.0}
+	vecB := []float32{0.9, 0.1} // very close to vecA — would rank high without model filter
+
+	if err := st.UpsertEmbedding(ctx, idA, "model-a", vecA); err != nil {
+		t.Fatalf("UpsertEmbedding model-a: %v", err)
+	}
+	if err := st.UpsertEmbedding(ctx, idB, "model-b", vecB); err != nil {
+		t.Fatalf("UpsertEmbedding model-b: %v", err)
+	}
+
+	// Search with Model="model-a" — must only return idA.
+	results, err := st.VectorSearch(ctx, vecA, store.SearchParams{
+		Project: proj,
+		Model:   "model-a",
+		Limit:   10,
+	})
+	if err != nil {
+		t.Fatalf("VectorSearch model-a: %v", err)
+	}
+	for _, r := range results {
+		if r.Observation.ID == idB {
+			t.Errorf("VectorSearch with Model=model-a: obs %d (model-b) must not appear", idB)
+		}
+	}
+	found := false
+	for _, r := range results {
+		if r.Observation.ID == idA {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("VectorSearch with Model=model-a: obs %d (model-a) should appear", idA)
+	}
+}

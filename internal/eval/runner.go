@@ -160,6 +160,83 @@ func Run(ctx context.Context, st *store.Store, queries []GoldenQuery, project st
 	return r, nil
 }
 
+// SearchFn is the signature used by RunWithSearchFn to allow the caller to
+// inject any search backend (BM25-only, hybrid RRF, etc.) without changing
+// the eval.Run signature.
+//
+// The function must return results in score order (best first) and may return
+// a non-nil Meta for context (e.g. Hybrid=true), which is currently ignored
+// by the runner but available for future reporting.
+type SearchFn func(ctx context.Context, params store.SearchParams) ([]store.SearchResult, error)
+
+// RunWithSearchFn is identical to Run except the caller supplies a SearchFn
+// instead of having the runner call store.SearchWithFallback directly. This
+// is the entry point used by the CLI when --embeddings is active.
+//
+// k is the precision cutoff; use 5 as the standard value.
+func RunWithSearchFn(ctx context.Context, search SearchFn, queries []GoldenQuery, project string, k int) (Report, error) {
+	if k <= 0 {
+		k = 5
+	}
+
+	var r Report
+
+	var normalPrecisions, normalMRRs []float64
+
+	for _, q := range queries {
+		results, err := search(ctx, store.SearchParams{
+			Q:       q.Query,
+			Project: project,
+			Limit:   k,
+		})
+		if err != nil {
+			return Report{}, fmt.Errorf("eval.RunWithSearchFn query %q: %w", q.ID, err)
+		}
+
+		got := make([]string, 0, len(results))
+		for _, res := range results {
+			got = append(got, res.Observation.Title)
+		}
+		if len(got) > k {
+			got = got[:k]
+		}
+
+		topHit := ""
+		if len(got) > 0 {
+			topHit = got[0]
+		}
+
+		mrr := MRR(q.Expected, got)
+		p := PrecisionAtK(q.Expected, got, k)
+
+		qr := QueryResult{
+			ID:         q.ID,
+			Query:      q.Query,
+			MRR:        mrr,
+			PrecisionK: p,
+			TopHit:     topHit,
+			ExpectFail: q.ExpectFail,
+		}
+
+		if q.ExpectFail {
+			r.KnownGaps = append(r.KnownGaps, qr)
+		} else {
+			r.PerQuery = append(r.PerQuery, qr)
+			normalPrecisions = append(normalPrecisions, p)
+			normalMRRs = append(normalMRRs, mrr)
+		}
+	}
+
+	if len(normalPrecisions) > 0 {
+		r.MeanPrecisionAt5 = mean(normalPrecisions)
+	}
+	if len(normalMRRs) > 0 {
+		r.MeanMRR = mean(normalMRRs)
+	}
+
+	return r, nil
+}
+
 func mean(vals []float64) float64 {
 	if len(vals) == 0 {
 		return 0

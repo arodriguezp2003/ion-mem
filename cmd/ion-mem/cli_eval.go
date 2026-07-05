@@ -7,18 +7,24 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/ionix/ion-mem/internal/embed"
 	"github.com/ionix/ion-mem/internal/eval"
+	"github.com/ionix/ion-mem/internal/hybrid"
 	"github.com/ionix/ion-mem/internal/store"
 )
 
 // evalConfig collects the parsed flags for the `eval` subcommand.
 type evalConfig struct {
-	golden  string // path to golden queries YAML (required)
-	corpus  string // path to corpus YAML (optional; seeds a temp store when present)
-	dataDir string // path to existing store (used when --corpus is absent)
-	project string // project name for query scoping
-	k       int    // precision cutoff (default 5)
+	golden     string // path to golden queries YAML (required)
+	corpus     string // path to corpus YAML (optional; seeds a temp store when present)
+	dataDir    string // path to existing store (used when --corpus is absent)
+	project    string // project name for query scoping
+	k          int    // precision cutoff (default 5)
+	embeddings bool   // when true, use hybrid RRF searcher instead of BM25-only
+	ollamaURL  string // Ollama base URL for embedding (default http://localhost:11434)
+	model      string // embedding model name (default nomic-embed-text)
 }
 
 // parseEvalFlags parses the `ion-mem eval` flag set.
@@ -32,6 +38,9 @@ func parseEvalFlags(args []string, homeDir func() (string, error)) (evalConfig, 
 	dataDir := fs.String("data-dir", defaultDataDir(homeDir), "Data directory for an existing store (used when --corpus is absent).")
 	project := fs.String("project", "default", "Project name to scope queries.")
 	k := fs.Int("k", 5, "Precision cutoff k (default 5).")
+	embeddings := fs.Bool("embeddings", false, "Use hybrid RRF searcher (BM25 + vector) instead of BM25-only.")
+	ollamaURL := fs.String("ollama-url", "http://localhost:11434", "Ollama base URL for embeddings (used when --embeddings is set).")
+	model := fs.String("model", "nomic-embed-text", "Embedding model name (used when --embeddings is set).")
 
 	if err := fs.Parse(args); err != nil {
 		return evalConfig{}, fmt.Errorf("ion-mem eval: %w", err)
@@ -44,11 +53,14 @@ func parseEvalFlags(args []string, homeDir func() (string, error)) (evalConfig, 
 	}
 
 	return evalConfig{
-		golden:  *golden,
-		corpus:  *corpus,
-		dataDir: *dataDir,
-		project: *project,
-		k:       *k,
+		golden:     *golden,
+		corpus:     *corpus,
+		dataDir:    *dataDir,
+		project:    *project,
+		k:          *k,
+		embeddings: *embeddings,
+		ollamaURL:  *ollamaURL,
+		model:      *model,
 	}, nil
 }
 
@@ -105,9 +117,47 @@ func runEval(args []string, out io.Writer) error {
 		defer st.Close()
 	}
 
-	report, err := eval.Run(ctx, st, queries, cfg.project, cfg.k)
-	if err != nil {
-		return fmt.Errorf("eval: run: %w", err)
+	var report eval.Report
+
+	if cfg.embeddings {
+		// Hybrid mode: backfill corpus embeddings (best-effort) then evaluate via RRF.
+		client := embed.DefaultClient(cfg.ollamaURL)
+		embedder := embed.NewOllamaEmbedder(client, cfg.model)
+
+		if cfg.corpus != "" {
+			// Best-effort: embed any observations that were just seeded.
+			// MissingEmbeddings returns observations without a vector row.
+			missing, _ := st.MissingEmbeddings(ctx, cfg.project, cfg.model, 500)
+			for _, obs := range missing {
+				text := obs.Title + "\n" + obs.Content
+				embedCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				vec, embedErr := embedder.Embed(embedCtx, text)
+				cancel()
+				if embedErr != nil {
+					// Best-effort: skip un-embeddable docs; they still rank via BM25.
+					continue
+				}
+				_ = st.UpsertEmbedding(ctx, obs.ID, cfg.model, vec)
+			}
+		}
+
+		searcher := hybrid.NewSearcher(st, embedder)
+
+		searchFn := func(ctx context.Context, params store.SearchParams) ([]store.SearchResult, error) {
+			results, _, err := searcher.Search(ctx, params)
+			return results, err
+		}
+
+		report, err = eval.RunWithSearchFn(ctx, searchFn, queries, cfg.project, cfg.k)
+		if err != nil {
+			return fmt.Errorf("eval: run with embeddings: %w", err)
+		}
+	} else {
+		// Standard BM25-only path (unchanged for CI).
+		report, err = eval.Run(ctx, st, queries, cfg.project, cfg.k)
+		if err != nil {
+			return fmt.Errorf("eval: run: %w", err)
+		}
 	}
 
 	writeEvalReport(out, report, cfg.k)

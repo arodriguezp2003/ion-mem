@@ -238,12 +238,25 @@ func (m Model) saveConfigSetting(key, value string) tea.Cmd {
 //   - err   — first fatal error that stopped the loop (nil on full success or
 //     partial completion where individual embed failures were skipped).
 func regenerateAll(ctx context.Context, st *store.Store, embedder embed.Embedder) (done, total int, err error) {
+	return regenerateAllWithBatch(ctx, st, embedder, 50)
+}
+
+// regenerateAllWithBatch is the testable core of regenerateAll. The batch
+// parameter controls how many observations are fetched per iteration; callers
+// that need the default production behaviour should use regenerateAll instead.
+//
+// Zero-progress guard: if a full batch is fetched (len(missing) == batch) but
+// every embed attempt in that batch fails (batchSucceeded == 0), the loop
+// terminates immediately and returns a non-nil error to prevent an infinite
+// loop where the same unembeddable rows are re-fetched on every iteration.
+func regenerateAllWithBatch(ctx context.Context, st *store.Store, embedder embed.Embedder, batch int) (done, total int, err error) {
 	model := embedder.Model()
-	const batch = 50
 
 	if _, err := st.DeleteAllEmbeddings(ctx); err != nil {
 		return 0, 0, fmt.Errorf("regenerate: clear embeddings: %w", err)
 	}
+
+	var lastEmbedErr error
 
 	for {
 		missing, fetchErr := st.MissingEmbeddings(ctx, "", model, batch)
@@ -254,6 +267,7 @@ func regenerateAll(ctx context.Context, st *store.Store, embedder embed.Embedder
 			break
 		}
 
+		batchSucceeded := 0
 		for _, obs := range missing {
 			text := obs.Title + "\n" + obs.Content
 
@@ -262,6 +276,7 @@ func regenerateAll(ctx context.Context, st *store.Store, embedder embed.Embedder
 			cancel()
 
 			if embedErr != nil {
+				lastEmbedErr = embedErr
 				// Skip individual embed failures; caller reports partial.
 				continue
 			}
@@ -271,10 +286,23 @@ func regenerateAll(ctx context.Context, st *store.Store, embedder embed.Embedder
 				continue
 			}
 			done++
+			batchSucceeded++
 		}
 
+		fullBatch := len(missing) == batch
 		if len(missing) < batch {
 			break
+		}
+		if fullBatch && batchSucceeded == 0 {
+			// Zero-progress guard: a full batch was fetched but nothing was
+			// successfully embedded. Without this break the loop would refetch
+			// the same rows forever. Surface the last embed error so callers
+			// can distinguish a systemic failure from a clean empty-store exit.
+			_, total, _ = st.EmbeddingCoverage(ctx, "", model)
+			if lastEmbedErr != nil {
+				return done, total, fmt.Errorf("regenerate: no progress in last batch: %w", lastEmbedErr)
+			}
+			return done, total, nil
 		}
 	}
 

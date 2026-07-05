@@ -67,6 +67,10 @@ type SearchParams struct {
 	Project string // optional filter
 	Scope   string // optional filter
 	Limit   int    // default 20 when <= 0
+	// Model is an embedding model filter used exclusively by VectorSearch.
+	// When non-empty, only embedding rows whose model column matches are
+	// considered. When empty, all models are included (backwards-compatible).
+	Model string
 }
 
 // BM25 column weights for observations_fts.

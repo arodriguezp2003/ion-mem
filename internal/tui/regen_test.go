@@ -171,6 +171,36 @@ func TestRegenerateAll_EmbedderError(t *testing.T) {
 	}
 }
 
+// ─── 3b. Infinite loop guard: fully-failing batch must terminate ──────────────
+
+// TestRegenerateAll_FullBatchFailTerminates verifies that when every embed call
+// fails for a complete batch, regenerateAll returns instead of looping forever.
+// We use 3 observations with a batch size of 2 so the first batch is full (==batch)
+// but produces zero successes — without the guard, the loop would refetch the same
+// rows indefinitely.
+func TestRegenerateAll_FullBatchFailTerminates(t *testing.T) {
+	ctx := context.Background()
+	st := openRegenStore(t)
+
+	// Three observations so the first batch of 2 is a full batch.
+	seedRegenObs(t, st, "loop-obs-1", "proj-loop")
+	seedRegenObs(t, st, "loop-obs-2", "proj-loop")
+	seedRegenObs(t, st, "loop-obs-3", "proj-loop")
+
+	embedder := &fakeEmbedder{
+		modelName:  "fake-model",
+		errOnEmbed: errors.New("always fails"),
+	}
+
+	done, _, err := regenerateAllWithBatch(ctx, st, embedder, 2)
+	if done != 0 {
+		t.Errorf("done = %d, want 0 (all embed calls failed)", done)
+	}
+	if err == nil {
+		t.Error("expected non-nil error when all embed calls fail, got nil")
+	}
+}
+
 // ─── 4. Clears existing embeddings first ─────────────────────────────────────
 
 func TestRegenerateAll_ClearsExistingEmbeddingsFirst(t *testing.T) {
