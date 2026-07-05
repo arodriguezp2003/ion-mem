@@ -9,6 +9,12 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
+// contentChanging returns true when params includes a Title or Content update
+// (i.e. the text that gets embedded has changed).
+func contentChanging(params store.UpdateObservationParams) bool {
+	return params.Title != nil || params.Content != nil
+}
+
 // buildUpdateTool constructs the ion_update ServerTool.
 func buildUpdateTool(s *Server) mcpserver.ServerTool {
 	tool := mcplib.NewTool("ion_update",
@@ -53,9 +59,23 @@ func handleUpdate(s *Server) toolHandler {
 			return textResult(raw), nil
 		}
 
+		// Best-effort re-embed when title or content changed.
+		// On embed failure: delete the stale vector (a stale vector must not lie).
+		var embedded bool
+		if contentChanging(params) {
+			title := obs.Title
+			content := obs.Content
+			embedded = tryEmbed(ctx, s.store, obs.ID, title, content)
+			if !embedded {
+				// Best-effort delete of any stale embedding.
+				_ = s.store.DeleteEmbedding(ctx, obs.ID)
+			}
+		}
+
 		obsMap := observationToMap(obs)
 		raw := Build(det, "observation updated", map[string]any{
 			"observation": obsMap,
+			"embedded":    embedded,
 		})
 		return textResult(raw), nil
 	}

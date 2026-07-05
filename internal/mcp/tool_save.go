@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"time"
 
+	"github.com/ionix/ion-mem/internal/embed"
 	"github.com/ionix/ion-mem/internal/store"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -84,14 +86,49 @@ func handleSave(s *Server) toolHandler {
 			return textResult(raw), nil
 		}
 
+		// Best-effort embedding: read settings, embed title+content, upsert row.
+		// On any failure: save still succeeds; embedded=false in the response.
+		embedded := tryEmbed(ctx, s.store, obs.ID, title, content)
+
 		extras := map[string]any{
 			"id":              obs.ID,
 			"sync_id":         obs.SyncID,
 			"revision_count":  obs.RevisionCount,
 			"duplicate_count": obs.DuplicateCount,
 			"prompt_attached": promptAttached,
+			"embedded":        embedded,
 		}
 		raw := Build(det, "observation saved", extras)
 		return textResult(raw), nil
 	}
+}
+
+// tryEmbed attempts to embed title+"\n"+content using the current settings.
+// Returns true when the embedding was stored successfully, false on any error.
+// This is always best-effort: callers must not fail the main operation on false.
+func tryEmbed(ctx context.Context, st *store.Store, obsID int64, title, content string) bool {
+	enabled := st.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false")
+	if enabled != "true" {
+		return false
+	}
+
+	url := st.SettingOrDefault(ctx, store.SettingOllamaURL, "http://localhost:11434")
+	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+
+	client := embed.DefaultClient(url)
+	embedder := embed.NewOllamaEmbedder(client, model)
+
+	embedCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	text := title + "\n" + content
+	vec, err := embedder.Embed(embedCtx, text)
+	if err != nil {
+		return false
+	}
+
+	if err := st.UpsertEmbedding(ctx, obsID, model, vec); err != nil {
+		return false
+	}
+	return true
 }
