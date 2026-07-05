@@ -10,7 +10,7 @@ This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on d
 
 ## AVAILABLE TOOLS
 
-All 14 `ion_*` tools are loaded automatically at session start by the
+All 15 `ion_*` tools are loaded automatically at session start by the
 UserPromptSubmit hook. They are available immediately — no manual ToolSearch
 needed.
 
@@ -26,17 +26,31 @@ needed.
 **Utilities**:
 - `ion_current_project`, `ion_stats`
 
-**Fallback**: If tools are unexpectedly unavailable, run `ion-mem setup claude-code`
-again and restart Claude Code.
-<!-- NOTE: `ion-mem setup claude-code` does not exist yet — it is a placeholder
-     for a future change that will implement the setup subcommand. Until then,
-     install manually by symlinking plugin/claude-code into ~/.claude/plugins/. -->
+**History**:
+- `ion_history` — call with `id` (required) and optional `limit` to retrieve an
+  observation's current summary plus its prior revisions newest-first. Use this
+  when an observation's content looks wrong or stale, or when you need what a
+  topic said before an overwrite (topic upserts keep the last 10 revisions).
 
-<!-- NOTE: ion_capture_passive (engram parity) is not yet implemented in ion-mem;
-     it is deferred to a future change. Do not call it — the SubagentStop hook
-     is also disabled until that tool ships. -->
-<!-- NOTE: ion_judge / ion_compare (engram's conflict surfacing) are deferred
-     to a future mcp-conflict-surfacing change. Do not call them. -->
+**Fallback**: If tools are unexpectedly unavailable, reinstall via `make install`
+from the ion-memory repo root, or verify the binary is on PATH with
+`which ion-mem`, then restart Claude Code.
+
+## READING RESULT SIGNALS
+
+Interpret these fields returned by search and save operations:
+
+- `ion_search` → `fuzzy: true`: the OR/lexical fallback fired — results are weaker
+  matches. Consider using more specific or different search terms.
+- `ion_search` → `hybrid: true`: vector+BM25 RRF fusion ran (requires embeddings
+  enabled and Ollama reachable). Results combine semantic and lexical relevance.
+  Spanish↔English cross-language recall works when embeddings use bge-m3.
+- `ion_save` → `embedded: false`: the observation was saved but did not receive a
+  vector embedding (embeddings are off or Ollama was unreachable). The memory is
+  still keyword-searchable; run EMBED MISSING in the TUI config view later to
+  backfill vectors.
+- `ion_search` → `all_projects: true`: pass this flag to search across all projects
+  and personal scope, not just the current project.
 
 ## PROACTIVE SAVE TRIGGERS (mandatory — do NOT wait for user to ask)
 
@@ -134,4 +148,3 @@ If you see a message about compaction or context reset:
 3. Only THEN continue working
 
 Do not skip step 1. Without it, everything done before compaction is lost from memory.
-All core tools are loaded automatically by the hook at session start. If they are unexpectedly missing, rerun `ion-mem setup claude-code` and restart Claude Code.
