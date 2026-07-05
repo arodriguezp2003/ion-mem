@@ -3,6 +3,7 @@ package hybrid_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -381,5 +382,46 @@ func TestOllamaEmbedder_ModelForwardedInRequest(t *testing.T) {
 	}
 	if capturedBody["model"] != "nomic-embed-text" {
 		t.Errorf("model forwarded = %q, want %q", capturedBody["model"], "nomic-embed-text")
+	}
+}
+
+// TestWeightedRRF_VectorBoostLetsSingleListWin verifies that the vector weight
+// lets a top pure-semantic hit outrank a doc that appears DEEP in both lists.
+// (Dual presence near the top legitimately wins regardless of weight — with
+// k=60 a rank-2 dual doc scores 3/62, unreachable for any single-list hit.)
+func TestWeightedRRF_VectorBoostLetsSingleListWin(t *testing.T) {
+	// "both" sits at rank 40 in each list; "semantic" is rank 1 vector-only.
+	// Plain RRF: both = 2/100 = 0.020 > semantic = 1/61 ≈ 0.0164 → both wins.
+	// Weight 2.0: both = 3/100 = 0.030 < semantic = 2/61 ≈ 0.0328 → flips.
+	deepList := func(prefix string, last string) []string {
+		list := make([]string, 40)
+		for i := 0; i < 39; i++ {
+			list[i] = fmt.Sprintf("%s-filler-%d", prefix, i)
+		}
+		list[39] = last
+		return list
+	}
+	bm25 := deepList("bm25", "both")
+	vec := append([]string{"semantic"}, deepList("vec", "both")[1:]...)
+
+	plain := hybrid.RRF(bm25, vec)
+	if plain["semantic"] >= plain["both"] {
+		t.Fatalf("precondition failed: plain RRF should favor the dual-list doc (semantic=%f both=%f)",
+			plain["semantic"], plain["both"])
+	}
+
+	weighted := hybrid.WeightedRRF([]float64{1.0, 2.0}, bm25, vec)
+	if weighted["semantic"] <= weighted["both"] {
+		t.Errorf("weighted RRF should let the top pure-semantic hit win: semantic=%f both=%f",
+			weighted["semantic"], weighted["both"])
+	}
+}
+
+// TestWeightedRRF_MissingWeightsDefaultToOne verifies the defensive default.
+func TestWeightedRRF_MissingWeightsDefaultToOne(t *testing.T) {
+	got := hybrid.WeightedRRF(nil, []string{"a"}, []string{"a"})
+	want := hybrid.RRF([]string{"a"}, []string{"a"})
+	if got["a"] != want["a"] {
+		t.Errorf("nil weights should equal unweighted RRF: got %f want %f", got["a"], want["a"])
 	}
 }

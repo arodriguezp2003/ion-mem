@@ -16,6 +16,15 @@ import (
 // A value of 60 is the standard recommendation from the original RRF paper.
 const rrfK = 60.0
 
+// vectorRRFWeight boosts the vector list in the hybrid fusion. Plain RRF is
+// biased toward documents that appear in BOTH lists: a lexically-adjacent
+// distractor (shares one query word AND is vaguely semantically close) can
+// outrank the true semantic match that only the vector list surfaces. A
+// weight > 1 on the vector list lets a strong pure-semantic hit compete.
+// Calibrated against the golden set (see internal/eval): lexical MeanMRR
+// must stay 1.0 while the semantic-gap queries improve.
+const vectorRRFWeight = 2.0
+
 // RRF computes Reciprocal Rank Fusion scores across one or more ranked lists.
 // Each list contains string keys (e.g. observation sync_id or numeric ID as string).
 // Score for key k = sum over all lists of 1 / (rrfK + rank), where rank is
@@ -23,11 +32,25 @@ const rrfK = 60.0
 //
 // Returns a map[key]score. Higher score = better combined rank.
 func RRF(lists ...[]string) map[string]float64 {
+	weights := make([]float64, len(lists))
+	for i := range weights {
+		weights[i] = 1.0
+	}
+	return WeightedRRF(weights, lists...)
+}
+
+// WeightedRRF is RRF with a per-list weight: score for key k = sum over lists
+// of weight[i] / (rrfK + rank). weights must have the same length as lists.
+func WeightedRRF(weights []float64, lists ...[]string) map[string]float64 {
 	scores := make(map[string]float64)
-	for _, list := range lists {
+	for li, list := range lists {
+		w := 1.0
+		if li < len(weights) {
+			w = weights[li]
+		}
 		for i, key := range list {
 			rank := float64(i + 1) // 1-based
-			scores[key] += 1.0 / (rrfK + rank)
+			scores[key] += w / (rrfK + rank)
 		}
 	}
 	return scores
@@ -150,7 +173,7 @@ func (s *Searcher) Search(ctx context.Context, params store.SearchParams) ([]sto
 		vecKeys = append(vecKeys, r.Observation.SyncID)
 	}
 
-	rrfScores := RRF(bm25Keys, vecKeys)
+	rrfScores := WeightedRRF([]float64{1.0, vectorRRFWeight}, bm25Keys, vecKeys)
 
 	// Build a merged result set indexed by sync_id. Prefer the BM25-side entry
 	// (which carries the Snippet) when a doc appears in both.
