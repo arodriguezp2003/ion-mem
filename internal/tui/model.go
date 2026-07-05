@@ -1475,6 +1475,12 @@ func (m Model) viewProjects() string {
 	if pos != "" {
 		statusLeft += "  " + pos
 	}
+	// When a project is selected, show its most-recent directory if known.
+	if m.err == nil && len(m.projects) > 0 && m.projectCursor < len(m.projects) {
+		if dir := m.projects[m.projectCursor].LastDirectory; dir != "" {
+			statusLeft += "  " + dir
+		}
+	}
 	if m.err != nil {
 		statusLeft = "ERROR: " + m.err.Error()
 	}

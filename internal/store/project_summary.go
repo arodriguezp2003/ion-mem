@@ -14,6 +14,7 @@ type ProjectSummary struct {
 	ObservationCount int64
 	SessionCount     int64
 	LastActivity     time.Time // most recent observation updated_at for the project
+	LastDirectory    string    // most recent session directory for the project; empty when no sessions exist
 }
 
 // ProjectSummaries returns one summary per project that has at least one
@@ -62,8 +63,12 @@ func (s *Store) ProjectSummaries(ctx context.Context) ([]ProjectSummary, error) 
 		projects = append(projects, r.project)
 	}
 
-	// Per-project session count.
-	sessionCounts := make(map[string]int64, len(projects))
+	// Per-project session count and most-recent directory.
+	type sessionInfo struct {
+		count         int64
+		lastDirectory string
+	}
+	sessionInfos := make(map[string]sessionInfo, len(projects))
 	for _, proj := range projects {
 		var count int64
 		if err := s.db.QueryRowContext(ctx,
@@ -71,7 +76,13 @@ func (s *Store) ProjectSummaries(ctx context.Context) ([]ProjectSummary, error) 
 		).Scan(&count); err != nil {
 			return nil, fmt.Errorf("store.ProjectSummaries session count for %q: %w", proj, err)
 		}
-		sessionCounts[proj] = count
+		var lastDir string
+		// Best-effort: ignore error when no sessions exist for the project.
+		_ = s.db.QueryRowContext(ctx,
+			`SELECT directory FROM sessions WHERE project=?
+			 ORDER BY started_at DESC LIMIT 1`, proj,
+		).Scan(&lastDir)
+		sessionInfos[proj] = sessionInfo{count: count, lastDirectory: lastDir}
 	}
 
 	summaries := make([]ProjectSummary, 0, len(raw))
@@ -84,11 +95,13 @@ func (s *Store) ProjectSummaries(ctx context.Context) ([]ProjectSummary, error) 
 				t = time.Time{}
 			}
 		}
+		info := sessionInfos[r.project]
 		summaries = append(summaries, ProjectSummary{
 			Project:          r.project,
 			ObservationCount: r.obsCount,
-			SessionCount:     sessionCounts[r.project],
+			SessionCount:     info.count,
 			LastActivity:     t,
+			LastDirectory:    info.lastDirectory,
 		})
 	}
 

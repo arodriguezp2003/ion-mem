@@ -75,7 +75,29 @@ func handleCurrentProject(s *Server) toolHandler {
 		if len(det.AvailableProjects) > 0 {
 			body["available_projects"] = det.AvailableProjects
 		}
+		// Attach known_directories (capped at 5) when the project is resolvable
+		// and the store has session records for it.
+		if det.Project != "" {
+			if dirs := knownDirectoriesForProject(ctx, s, det.Project); len(dirs) > 0 {
+				body["known_directories"] = dirs
+			}
+		}
 		raw, _ := json.Marshal(body)
 		return textResult(raw), nil
 	}
+}
+
+// knownDirectoriesForProject queries the store for the most recently used
+// directories of the given project, capped at 5 entries. It silently ignores
+// store errors so detection failures never surface as user-visible errors here.
+func knownDirectoriesForProject(ctx context.Context, s *Server, project string) []string {
+	const maxDirs = 5
+	dirs, err := s.store.ProjectDirectories(ctx, project)
+	if err != nil || len(dirs) == 0 {
+		return nil
+	}
+	if len(dirs) > maxDirs {
+		dirs = dirs[:maxDirs]
+	}
+	return dirs
 }
