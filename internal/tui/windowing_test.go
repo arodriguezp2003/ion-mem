@@ -225,14 +225,25 @@ func TestWindowListShorterThanHeight(t *testing.T) {
 
 // ─── render smoke test ────────────────────────────────────────────────────────
 
+// viewLines splits a View() string into lines, stripping the single trailing
+// newline that View() always appends. The returned slice has exactly as many
+// entries as rendered terminal rows.
+func viewLines(out string) []string {
+	// View() always ends with "\n"; TrimSuffix removes exactly that one newline.
+	trimmed := strings.TrimSuffix(out, "\n")
+	return strings.Split(trimmed, "\n")
+}
+
 // TestRenderSmoke builds a model with 50 fake observations at 80x24, moves the
 // cursor beyond the first window, and verifies:
 //  1. The selected row IS present in View() output.
-//  2. The number of rendered list rows fits within the terminal height.
+//  2. View() fills the terminal exactly — strings.Count(view,"\n")+1 == height.
 //  3. The position indicator ("cursor/total") appears in the output.
+//  4. The footer hint is on the last line; the status bar on the second-to-last.
 func TestRenderSmoke_ObservationsScrolledMidList(t *testing.T) {
+	const termH = 24
 	m := newModel()
-	m = setSize(m, 80, 24)
+	m = setSize(m, 80, termH)
 	m.view = viewObservations
 	m.selectedProject = "smoke-test"
 	m.observations = makeNObs(50)
@@ -252,11 +263,14 @@ func TestRenderSmoke_ObservationsScrolledMidList(t *testing.T) {
 		t.Errorf("View() does not contain selected row %q\noutput:\n%s", wantTitle, out)
 	}
 
-	// 2. Line count must not exceed terminal height.
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) > 24 {
-		t.Errorf("View() produced %d lines, want <= 24 (terminal height)\noutput:\n%s",
-			len(lines), out)
+	// 2. View() must fill the terminal exactly.
+	// View() always ends with "\n", so each rendered row contributes exactly one
+	// "\n". Therefore strings.Count(out, "\n") == number of rendered rows.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		lines := viewLines(out)
+		t.Errorf("View() produced %d lines, want exactly %d (terminal height)\nlines: %d\noutput:\n%s",
+			lineCount, termH, len(lines), out)
 	}
 
 	// 3. Position indicator must be present.
@@ -264,11 +278,27 @@ func TestRenderSmoke_ObservationsScrolledMidList(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Errorf("View() does not contain position indicator %q\noutput:\n%s", want, out)
 	}
+
+	// 4. Footer on last line; status bar on second-to-last.
+	lines := viewLines(out)
+	if len(lines) < 2 {
+		t.Fatalf("View() has fewer than 2 lines, cannot check chrome positions")
+	}
+	lastLine := lines[len(lines)-1]
+	secondLast := lines[len(lines)-2]
+
+	if !strings.Contains(lastLine, "quit") && !strings.Contains(lastLine, "q quit") {
+		t.Errorf("last line does not look like footer hints, got: %q", lastLine)
+	}
+	if !strings.Contains(secondLast, "observation(s)") {
+		t.Errorf("second-to-last line does not look like status bar, got: %q", secondLast)
+	}
 }
 
 func TestRenderSmoke_ProjectsView(t *testing.T) {
+	const termH = 24
 	m := newModel()
-	m = setSize(m, 80, 24)
+	m = setSize(m, 80, termH)
 	m.view = viewProjects
 	m.projects = []store.ProjectSummary{
 		{Project: "alpha", ObservationCount: 12, SessionCount: 3, LastActivity: time.Now().Add(-2 * time.Hour)},
@@ -290,14 +320,98 @@ func TestRenderSmoke_ProjectsView(t *testing.T) {
 		t.Errorf("View() does not contain selected project 'alpha'\noutput:\n%s", out)
 	}
 
-	// Line count must not exceed terminal height.
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) > 24 {
-		t.Errorf("View() produced %d lines, want <= 24\noutput:\n%s", len(lines), out)
+	// View() must fill the terminal exactly.
+	// View() always ends with "\n", so strings.Count(out, "\n") == rendered rows.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("View() produced %d lines, want exactly %d\noutput:\n%s", lineCount, termH, out)
 	}
 
 	// Position indicator.
 	if !strings.Contains(out, "1/3") {
 		t.Errorf("View() does not contain position indicator '1/3'\noutput:\n%s", out)
+	}
+
+	// Header on first line; footer on last; status bar on second-to-last.
+	lines := viewLines(out)
+	if len(lines) < 2 {
+		t.Fatalf("View() has fewer than 2 lines, cannot check chrome positions")
+	}
+	firstLine := lines[0]
+	lastLine := lines[len(lines)-1]
+	secondLast := lines[len(lines)-2]
+
+	if !strings.Contains(firstLine, "ion-mem") {
+		t.Errorf("first line does not contain brand 'ion-mem', got: %q", firstLine)
+	}
+	if !strings.Contains(lastLine, "quit") {
+		t.Errorf("last line does not look like footer hints, got: %q", lastLine)
+	}
+	if !strings.Contains(secondLast, "project(s)") {
+		t.Errorf("second-to-last line does not look like status bar, got: %q", secondLast)
+	}
+}
+
+// TestRenderSmoke_ShortListPadsToFullHeight pins the screenshot bug: when the
+// project list is shorter than the terminal height, the footer must still be
+// pinned to the last row (row 24 in a 24-row terminal), with the gap filled by
+// blank padding lines between the list and the status bar.
+func TestRenderSmoke_ShortListPadsToFullHeight(t *testing.T) {
+	const termH = 24
+	m := newModel()
+	m = setSize(m, 80, termH)
+	m.view = viewProjects
+	// Only 3 projects — far fewer than the 20 available content rows.
+	m.projects = []store.ProjectSummary{
+		{Project: "alpha", ObservationCount: 1, SessionCount: 1, LastActivity: time.Now().Add(-1 * time.Hour)},
+		{Project: "beta", ObservationCount: 2, SessionCount: 1, LastActivity: time.Now().Add(-2 * time.Hour)},
+		{Project: "gamma", ObservationCount: 3, SessionCount: 1, LastActivity: time.Now().Add(-3 * time.Hour)},
+	}
+	m.projectCursor = 0
+	m.projOffset = 0
+
+	out := m.View()
+
+	// View() must fill the terminal exactly regardless of list length.
+	// View() always ends with "\n", so strings.Count(out, "\n") == rendered rows.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("short list: View() produced %d lines, want exactly %d\noutput:\n%s",
+			lineCount, termH, out)
+	}
+
+	lines := viewLines(out)
+
+	// Footer is on the last line (line 24).
+	lastLine := lines[len(lines)-1]
+	if !strings.Contains(lastLine, "quit") {
+		t.Errorf("footer not on last line; last line = %q", lastLine)
+	}
+
+	// Status bar is on the second-to-last line (line 23).
+	secondLast := lines[len(lines)-2]
+	if !strings.Contains(secondLast, "project(s)") {
+		t.Errorf("status bar not on second-to-last line; got %q", secondLast)
+	}
+
+	// Header is on the first line.
+	if !strings.Contains(lines[0], "ion-mem") {
+		t.Errorf("header not on first line; got %q", lines[0])
+	}
+
+	// There must be at least one blank padding line between the list content
+	// and the status bar to prove padding is injected.
+	// Content starts at line 3 (0-indexed: 2) — lines[2] through lines[termH-3]
+	// include 3 project rows and then padding. At least one must be blank.
+	contentRows := lines[2 : termH-2] // indices 2..21 (20 rows)
+	blankFound := false
+	for _, l := range contentRows {
+		if strings.TrimSpace(l) == "" {
+			blankFound = true
+			break
+		}
+	}
+	if !blankFound {
+		t.Errorf("expected blank padding lines in content area but found none\ncontent rows: %v", contentRows)
 	}
 }
