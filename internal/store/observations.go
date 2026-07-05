@@ -58,6 +58,9 @@ type RecentObservationsParams struct {
 	Project string // optional
 	Scope   string // optional
 	Limit   int    // default 50 when <= 0
+	// Offset is the number of rows to skip before returning results (SQL OFFSET).
+	// Default 0 preserves existing behavior (no rows skipped).
+	Offset int
 }
 
 // SearchParams carries filters for Search.
@@ -414,8 +417,8 @@ func (s *Store) RecentObservations(ctx context.Context, params RecentObservation
 		query += " AND scope=?"
 		args = append(args, params.Scope)
 	}
-	query += " ORDER BY created_at DESC LIMIT ?"
-	args = append(args, limit)
+	query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, params.Offset)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
