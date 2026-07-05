@@ -32,6 +32,7 @@ var agentTools = map[string]struct{}{
 	"ion_timeline":          {},
 	"ion_stats":             {},
 	"ion_history":           {},
+	"ion_undelete":          {},
 }
 
 // Server is the central context carrier for the MCP stdio server.
@@ -142,6 +143,7 @@ func (s *Server) ServerTools() []mcpserver.ServerTool {
 		buildTimelineTool(s),
 		buildStatsTool(s),
 		buildHistoryTool(s),
+		buildUndeleteTool(s),
 	}
 
 	for _, st := range candidates {

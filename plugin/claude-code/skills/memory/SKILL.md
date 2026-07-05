@@ -10,12 +10,17 @@ This protocol is MANDATORY and ALWAYS ACTIVE — not something you activate on d
 
 ## AVAILABLE TOOLS
 
-All 15 `ion_*` tools are loaded automatically at session start by the
+All 16 `ion_*` tools are loaded automatically at session start by the
 UserPromptSubmit hook. They are available immediately — no manual ToolSearch
 needed.
 
 **Save & update**:
-- `ion_save`, `ion_update`, `ion_delete`, `ion_suggest_topic_key`
+- `ion_save`, `ion_update`, `ion_delete`, `ion_undelete`, `ion_suggest_topic_key`
+
+**Recovering soft-deleted observations**:
+- `ion_delete` with `hard: false` (the default) is a soft delete — recoverable.
+- Use `ion_undelete` with the observation `id` to restore it and make it searchable again.
+- Hard-deleted observations (hard: true) cannot be recovered.
 
 **Search & retrieve**:
 - `ion_search`, `ion_context`, `ion_get_observation`, `ion_timeline`

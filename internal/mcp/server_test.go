@@ -139,7 +139,7 @@ func assertEnvelopeShape(t *testing.T, tool string, env map[string]any) {
 	}
 }
 
-func TestServer_AgentAndAllProfileExactlyFifteenTools(t *testing.T) {
+func TestServer_AgentAndAllProfileExactlySixteenTools(t *testing.T) {
 	st := mustStore(t)
 	_, detOpt := mustFakeProject("ion-mem")
 
@@ -147,8 +147,8 @@ func TestServer_AgentAndAllProfileExactlyFifteenTools(t *testing.T) {
 		t.Run("profile="+profile, func(t *testing.T) {
 			ionSrv := mcp.New(st, mcp.WithProfile(profile), detOpt)
 			tools := ionSrv.ServerTools()
-			if len(tools) != 15 {
-				t.Errorf("profile %q: got %d tools, want 15", profile, len(tools))
+			if len(tools) != 16 {
+				t.Errorf("profile %q: got %d tools, want 16", profile, len(tools))
 			}
 			names := make(map[string]bool)
 			for _, tool := range tools {
@@ -170,6 +170,7 @@ func TestServer_AgentAndAllProfileExactlyFifteenTools(t *testing.T) {
 				"ion_timeline",
 				"ion_stats",
 				"ion_history",
+				"ion_undelete",
 			}
 			for _, expected := range expectedTools {
 				if !names[expected] {

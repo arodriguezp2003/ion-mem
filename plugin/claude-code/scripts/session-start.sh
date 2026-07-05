@@ -42,7 +42,7 @@ You have ion-mem memory tools. This protocol is MANDATORY and ALWAYS ACTIVE.
 ### CORE TOOLS — always available, no ToolSearch needed
 ion_save, ion_search, ion_context, ion_session_summary, ion_get_observation, ion_save_prompt
 
-Use ToolSearch for other tools: ion_update, ion_suggest_topic_key, ion_session_start, ion_session_end, ion_stats, ion_delete, ion_timeline, ion_history
+Use ToolSearch for other tools: ion_update, ion_suggest_topic_key, ion_session_start, ion_session_end, ion_stats, ion_delete, ion_undelete, ion_timeline, ion_history
 
 ion_history: retrieve revision history for an observation (params: id, optional limit) — use when content looks wrong/stale or you need the pre-overwrite value of a topic.
 
