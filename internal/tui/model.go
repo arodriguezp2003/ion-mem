@@ -82,27 +82,27 @@ type theme struct {
 }
 
 var defaultTheme = theme{
-	accent:  lipgloss.AdaptiveColor{Dark: "#7D56F4", Light: "#5B33D9"},
+	accent:  lipgloss.AdaptiveColor{Dark: "#D22B44", Light: "#8C1C2C"},
 	dim:     lipgloss.AdaptiveColor{Dark: "#626262", Light: "#888888"},
-	danger:  lipgloss.AdaptiveColor{Dark: "#FF5F87", Light: "#D00050"},
+	danger:  lipgloss.AdaptiveColor{Dark: "#FF6B3D", Light: "#C2410C"},
 	muted:   lipgloss.AdaptiveColor{Dark: "#444444", Light: "#BBBBBB"},
 	surface: lipgloss.AdaptiveColor{Dark: "#1C1C1C", Light: "#F5F5F5"},
 	amber:   lipgloss.AdaptiveColor{Dark: "#E8A000", Light: "#C07000"},
 }
 
 // badgeForegrounds maps observation types to foreground colors within the
-// accent family. Text rendered over the terminal default background.
-// [BUG  ] uses the warm amber secondary.
+// burgundy-to-rose accent family. Text rendered over the terminal default
+// background. [BUG  ] uses the warm amber secondary.
 var badgeForegrounds = map[string]lipgloss.TerminalColor{
-	"decision":        lipgloss.AdaptiveColor{Dark: "#BBA8FC", Light: "#5B33D9"},
-	"architecture":    lipgloss.AdaptiveColor{Dark: "#9B7CF8", Light: "#6A42D6"},
+	"decision":        lipgloss.AdaptiveColor{Dark: "#F5A0AB", Light: "#8C1C2C"},
+	"architecture":    lipgloss.AdaptiveColor{Dark: "#E86274", Light: "#771125"},
 	"bugfix":          defaultTheme.amber,
-	"discovery":       lipgloss.AdaptiveColor{Dark: "#7D56F4", Light: "#5B33D9"},
-	"config":          lipgloss.AdaptiveColor{Dark: "#6A42D6", Light: "#7D56F4"},
-	"preference":      lipgloss.AdaptiveColor{Dark: "#5B35C0", Light: "#9B7CF8"},
-	"pattern":         lipgloss.AdaptiveColor{Dark: "#8B6AF5", Light: "#4B2D9F"},
-	"session_summary": lipgloss.AdaptiveColor{Dark: "#A896FA", Light: "#4B2D9F"},
-	"manual":          lipgloss.AdaptiveColor{Dark: "#7D56F4", Light: "#5B33D9"},
+	"discovery":       lipgloss.AdaptiveColor{Dark: "#D22B44", Light: "#8C1C2C"},
+	"config":          lipgloss.AdaptiveColor{Dark: "#B01A33", Light: "#D22B44"},
+	"preference":      lipgloss.AdaptiveColor{Dark: "#92152C", Light: "#E86274"},
+	"pattern":         lipgloss.AdaptiveColor{Dark: "#DC4A5C", Light: "#5C0E1D"},
+	"session_summary": lipgloss.AdaptiveColor{Dark: "#EE8C99", Light: "#5C0E1D"},
+	"manual":          lipgloss.AdaptiveColor{Dark: "#D22B44", Light: "#8C1C2C"},
 }
 
 // badgeLabels maps type names to their 5-char uppercase BBS badge label.
@@ -140,7 +140,7 @@ var (
 	selectedRowStyle = lipgloss.NewStyle().
 				Bold(true).
 				Background(defaultTheme.accent).
-				Foreground(lipgloss.AdaptiveColor{Dark: "#0A0010", Light: "#FFFFFF"})
+				Foreground(lipgloss.AdaptiveColor{Dark: "#1A0407", Light: "#FFFFFF"})
 
 	// Status bar: inverse-video strip across content width.
 	statusBarStyle = lipgloss.NewStyle().
@@ -149,7 +149,7 @@ var (
 	// Fuzzy chip: accent background, dark text — uppercase ~FUZZY.
 	fuzzyChipStyle = lipgloss.NewStyle().
 			Background(defaultTheme.accent).
-			Foreground(lipgloss.AdaptiveColor{Dark: "#F0ECFF", Light: "#FFFFFF"}).
+			Foreground(lipgloss.AdaptiveColor{Dark: "#FFEDEE", Light: "#FFFFFF"}).
 			Bold(true).
 			Padding(0, 1)
 

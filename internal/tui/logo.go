@@ -24,12 +24,12 @@ const logoHeight = 9
 const logoMinTermHeight = 24
 
 // logoGradient lists 6 foreground colors in dark-to-light progression within
-// the accent purple family. Applied per-row to create a vertical gradient.
+// the burgundy-to-red accent family. Applied per-row to create a vertical gradient.
 var logoGradient = [6]string{
-	"#4B2D9F", // darkest — base purple
-	"#5B35C0",
-	"#6A42D6",
-	"#7D56F4", // accent (matches defaultTheme.accent Dark)
-	"#9B7CF8",
-	"#BBA8FC", // lightest — near-white violet
+	"#5C0E1D", // darkest — deep burgundy
+	"#771125",
+	"#92152C",
+	"#D22B44", // accent (matches defaultTheme.accent Dark)
+	"#E86274",
+	"#F5A0AB", // lightest — pale rose
 }
