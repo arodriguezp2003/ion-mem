@@ -240,25 +240,27 @@ func (m Model) handleConfigAction(spaceKey bool) (tea.Model, tea.Cmd) {
 		if m.jobRunning || m.configRegenerating {
 			return m, nil
 		}
-		// If a new-style regenBatchFn is injected, use the chained engine.
-		if m.regenBatchFn != nil {
-			m.jobRunning = true
-			m.jobDone = 0
-			m.jobTotal = 0
-			m.jobKind = jobKindRegen
-			m.jobResult = ""
+		// Legacy single-shot path ONLY when a test explicitly stubs regenFn.
+		if m.regenFn != nil {
 			m.configRegenerating = true
 			m.configRegenResult = ""
-			return m, m.regenBatchFn(m.configOllamaURL, m.configModel, 0, embedBatchSize)
+			return m, m.regenFn(m.configOllamaURL, m.configModel)
 		}
-		// Legacy path: single-shot regenFn (backwards compat with existing tests).
+		// Production path: chained-batch engine with live progress bar,
+		// same as EMBED MISSING (falls back to the default batch fn when
+		// no test injection is present).
+		batchFn := m.regenBatchFn
+		if batchFn == nil {
+			batchFn = m.makeDefaultRegenBatchFn()
+		}
+		m.jobRunning = true
+		m.jobDone = 0
+		m.jobTotal = 0
+		m.jobKind = jobKindRegen
+		m.jobResult = ""
 		m.configRegenerating = true
 		m.configRegenResult = ""
-		regenFn := m.regenFn
-		if regenFn == nil {
-			regenFn = m.makeDefaultRegenFn()
-		}
-		return m, regenFn(m.configOllamaURL, m.configModel)
+		return m, batchFn(m.configOllamaURL, m.configModel, 0, embedBatchSize)
 	}
 	return m, nil
 }
