@@ -23,6 +23,17 @@ const (
 	viewObservations
 	viewDetail
 	viewGlobalSearch // cross-project search results — observations list with project column
+	viewConfig       // embeddings / Ollama settings
+)
+
+// ─── config row indices ───────────────────────────────────────────────────────
+
+const (
+	configRowEmbeddings = 0
+	configRowOllamaURL  = 1
+	configRowModel      = 2
+	configRowTestConn   = 3
+	configRowCount      = 4
 )
 
 // ─── messages ─────────────────────────────────────────────────────────────────
@@ -57,15 +68,33 @@ type deleteResultMsg struct {
 // errMsg wraps an error for display in the status bar.
 type errMsg struct{ err error }
 
+// configSettingsLoadedMsg carries the settings values read from the store on
+// config view entry.
+type configSettingsLoadedMsg struct {
+	embeddingsEnabled bool
+	ollamaURL         string
+	model             string
+}
+
+// configSaveSettingMsg signals that a setting was persisted (fire-and-forget).
+type configSaveSettingMsg struct{}
+
+// configProbeResultMsg carries the result of a TEST CONNECTION probe.
+type configProbeResultMsg struct {
+	ok   bool
+	info string // human-readable summary or error message
+}
+
 // ─── key bindings ──────────────────────────────────────────────────────────────
 
 // bbsFooter renders the BBS-style key legend. It is context-sensitive:
 // the observations and detail views include the Delete action.
 const (
-	bbsFooterBase   = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [ESC] BACK  [Q] QUIT"
+	bbsFooterBase   = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [C] CONFIG  [ESC] BACK  [Q] QUIT"
 	bbsFooterDelete = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [D] DELETE  [ESC] BACK  [Q] QUIT"
 	bbsFooterDetail = "[↑↓] SCROLL  [D] DELETE  [ESC] BACK  [Q] QUIT"
 	bbsFooterSearch = "[⏎] SUBMIT  [ESC] CANCEL"
+	bbsFooterConfig = "[↑↓] MOVE  [⏎] EDIT/RUN  [ESC] BACK  [Q] QUIT"
 )
 
 // ─── theme ────────────────────────────────────────────────────────────────────
@@ -289,6 +318,24 @@ type Model struct {
 	// Delete confirm.
 	confirmDelete bool
 
+	// Config view.
+	configCursor            int    // which settings row is selected
+	configEditing           bool   // true when inline text input is open
+	configEmbeddingsEnabled bool   // current toggle value (not persisted until changed)
+	configOllamaURL         string // current URL value
+	configModel             string // current model name
+	configTesting           bool   // true while TEST CONNECTION probe is in flight
+	configTestResult        string // last probe result (empty = none yet)
+	configTestOK            bool   // true if last probe succeeded
+	configEditOrig          string // original value before editing (for Esc cancel)
+	configInput             textinput.Model
+
+	// probeFn is the function used to run the Ollama connection test. In
+	// production it creates an embed.Client and calls Ping/HasModel/ProbeEmbed.
+	// In unit tests it is replaced with a stub that returns a fake result
+	// without needing a real server.
+	probeFn func(url, model string) tea.Cmd
+
 	// UI components.
 	status string
 	err    error
@@ -301,10 +348,16 @@ func newModel() Model {
 	ti.Placeholder = "search..."
 	ti.CharLimit = 128
 
+	ci := textinput.New()
+	ci.CharLimit = 256
+
 	return Model{
-		searchInput: ti,
-		view:        viewProjects,
-		version:     "dev",
+		searchInput:     ti,
+		configInput:     ci,
+		configOllamaURL: "http://localhost:11434",
+		configModel:     "nomic-embed-text",
+		view:            viewProjects,
+		version:         "dev",
 	}
 }
 
@@ -481,6 +534,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case deleteResultMsg:
 		return m, m.fetchObservations(msg.project)
 
+	case configSettingsLoadedMsg:
+		m.configEmbeddingsEnabled = msg.embeddingsEnabled
+		m.configOllamaURL = msg.ollamaURL
+		m.configModel = msg.model
+		return m, nil
+
+	case configSaveSettingMsg:
+		// fire-and-forget — no state change required
+		return m, nil
+
+	case configProbeResultMsg:
+		m.configTesting = false
+		m.configTestOK = msg.ok
+		m.configTestResult = msg.info
+		return m, nil
+
 	case errMsg:
 		m.err = msg.err
 		return m, nil
@@ -582,6 +651,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyDetail(msg)
 	case viewGlobalSearch:
 		return m.handleKeyGlobalSearch(msg)
+	case viewConfig:
+		return m.handleKeyConfig(msg)
 	}
 	return m, nil
 }
@@ -617,6 +688,14 @@ func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput.Placeholder = "Search all projects…"
 		m.searchInput.Focus()
 		return m, textinput.Blink
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'c':
+		// Open config view.
+		m.view = viewConfig
+		m.configCursor = 0
+		m.configEditing = false
+		m.configTesting = false
+		m.configTestResult = ""
+		return m, m.fetchConfigSettings()
 	}
 	return m, nil
 }
@@ -731,6 +810,8 @@ func (m Model) View() string {
 		return m.viewDetail()
 	case viewGlobalSearch:
 		return m.viewGlobalSearchResults()
+	case viewConfig:
+		return m.viewConfigPage()
 	}
 	return ""
 }
@@ -891,6 +972,8 @@ func (m Model) renderFooter() string {
 		hint = bbsFooterDetail
 	case viewObservations, viewGlobalSearch:
 		hint = bbsFooterDelete
+	case viewConfig:
+		hint = bbsFooterConfig
 	default:
 		hint = bbsFooterBase
 	}
