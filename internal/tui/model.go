@@ -144,15 +144,23 @@ var (
 
 const (
 	// headerRows is the number of lines consumed by the header bar.
-	headerRows = 2 // brand line + blank separator
+	// 1 brand line + 1 separator line.
+	headerRows = 2
 	// statusRows is the number of lines consumed by status bar + footer.
-	statusRows = 3 // blank + status + footer
+	// 1 status line + 1 footer line — no leading blank; padding is injected
+	// into the content area to pin chrome to the terminal bottom.
+	statusRows = 2
 	// searchRowExtra is the extra lines the inline search input takes.
 	searchRowExtra = 2
 	// minVisibleRows is the minimum number of list rows to show.
 	minVisibleRows = 1
 	// scrollMargin is the look-ahead margin kept when scrolling.
 	scrollMargin = 2
+	// leftPad is the consistent horizontal left padding for all content rows.
+	leftPad = 2
+	// rightPad is the right-side padding kept between right-aligned content and
+	// the terminal edge.
+	rightPad = 2
 )
 
 // ─── model ────────────────────────────────────────────────────────────────────
@@ -298,9 +306,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Recompute viewport height: total height minus header, status/footer,
-		// and the metadata lines rendered above the viewport in detail view (5 lines).
-		vpHeight := msg.Height - headerRows - statusRows - 5
+		// Recompute viewport height for detail view.
+		// Content area = height - headerRows - statusRows.
+		// Inside the content area the metadata block uses at minimum 4 lines
+		// (title, type/project/scope, created/updated, horizontal rule).
+		// The viewport gets the remainder.
+		const detailMetaLines = 4
+		vpHeight := msg.Height - headerRows - statusRows - detailMetaLines
 		if vpHeight < 1 {
 			vpHeight = 1
 		}
@@ -522,22 +534,70 @@ func (m Model) View() string {
 }
 
 // renderHeader renders the branded top bar. Left side: "ion-mem vX.Y.Z",
-// right side: breadcrumb. Width-aware when m.width > 0.
+// right side: breadcrumb with rightPad columns of right margin.
+// Width-aware when m.width > 0.
 func (m Model) renderHeader(breadcrumb string) string {
 	brand := headerStyle.Render("ion-mem") + " " + dimStyle.Render(m.version)
 	right := dimStyle.Render(breadcrumb)
 
 	if m.width > 0 {
-		// Compute raw lengths (strip ANSI for width math).
 		brandLen := lipgloss.Width(brand)
 		rightLen := lipgloss.Width(right)
-		gap := m.width - brandLen - rightLen
+		gap := m.width - brandLen - rightLen - rightPad
 		if gap < 1 {
 			gap = 1
 		}
-		return brand + strings.Repeat(" ", gap) + right
+		return brand + strings.Repeat(" ", gap) + right + strings.Repeat(" ", rightPad)
 	}
 	return brand + "  " + right
+}
+
+// renderSeparator renders a full-width horizontal rule in muted style.
+// This acts as the visual divider below the header bar.
+func (m Model) renderSeparator() string {
+	w := m.width
+	if w < 1 {
+		w = 40
+	}
+	return mutedStyle.Render(strings.Repeat("─", w))
+}
+
+// padContentArea returns a string that renders as exactly targetRows lines when
+// split on "\n". The input content may end with a newline or not.
+//
+// The caller composes the final view as:
+//
+//	padContentArea(content, rows) + "\n" + statusLine + "\n" + footerLine + "\n"
+//
+// so the return value must NOT carry a trailing newline — the caller's "\n"
+// after padContentArea becomes the last newline of the padded content region.
+//
+// Padding is computed as:
+//   - count lines already in content (each "\n" terminates one line)
+//   - if content does not end in "\n", the partial last chunk counts as one line
+//   - append blank lines until line count == targetRows
+//   - strip exactly one trailing "\n" so the caller's join "\n" re-terminates it
+func padContentArea(content string, targetRows int) string {
+	if targetRows <= 0 {
+		return strings.TrimSuffix(content, "\n")
+	}
+	// Each "\n" terminates a line.
+	n := strings.Count(content, "\n")
+	if content != "" && !strings.HasSuffix(content, "\n") {
+		// Last partial line has no terminating newline; it still occupies one row.
+		n++
+		// Normalise: give it a newline so the padding loop is uniform.
+		content += "\n"
+	}
+	// Append blank lines until we have targetRows terminated lines.
+	for n < targetRows {
+		content += "\n"
+		n++
+	}
+	// The caller appends "\n" after padContentArea (as the join character
+	// between padded content and statusLine), so strip the last "\n" here to
+	// avoid an off-by-one blank line.
+	return strings.TrimSuffix(content, "\n")
 }
 
 // renderFooter renders the key-hint footer in dim style.
@@ -562,19 +622,21 @@ func overflowMarkers(offset, visible, total int) (bool, bool) {
 }
 
 func (m Model) viewProjects() string {
-	var sb strings.Builder
+	// ── chrome ──────────────────────────────────────────────────────────────
+	header := m.renderHeader("Projects")
+	separator := m.renderSeparator()
 
-	sb.WriteString(m.renderHeader("Projects") + "\n\n")
+	// ── content rows ────────────────────────────────────────────────────────
+	var content strings.Builder
 
 	if len(m.projects) == 0 {
-		// Centered friendly empty state.
 		msg := dimStyle.Render("No projects yet — memories will appear as agents save them.")
 		if m.width > 0 {
 			msg = lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Foreground(defaultTheme.dim).Render(
 				"No projects yet — memories will appear as agents save them.",
 			)
 		}
-		sb.WriteString(msg + "\n")
+		content.WriteString(msg + "\n")
 	} else {
 		visible := m.listVisibleHeight(false)
 		offset := m.projOffset
@@ -582,35 +644,72 @@ func (m Model) viewProjects() string {
 
 		showUp, showDown := overflowMarkers(offset, visible, total)
 		if showUp {
-			sb.WriteString(mutedStyle.Render("  ↑ more") + "\n")
+			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
 		}
 
 		end := offset + visible
 		if end > total {
 			end = total
 		}
+
+		// Compute right-aligned activity column width.
+		activityWidth := 10 // "26d ago" max ~10 chars
+		nameWidth := 28
+
 		for i := offset; i < end; i++ {
 			p := m.projects[i]
-			name := truncStr(p.Project, 28)
+			name := truncStr(p.Project, nameWidth)
 			counts := fmt.Sprintf("%4d obs  %3d sessions", p.ObservationCount, p.SessionCount)
-			activity := dimStyle.Render(humanizeTime(p.LastActivity))
+			activityStr := humanizeTime(p.LastActivity)
 
-			if i == m.projectCursor {
-				indicator := selectedRowStyle.Render("▌ ")
-				nameStr := selectedRowStyle.Render(fmt.Sprintf("%-28s", name))
-				countsStr := boldStyle.Render(counts)
-				sb.WriteString(indicator + nameStr + "  " + countsStr + "  " + activity + "\n")
+			// Right-align the activity column: pad so it ends at width-rightPad.
+			var row string
+			if m.width > 0 {
+				left := strings.Repeat(" ", leftPad)
+				if i == m.projectCursor {
+					left = selectedRowStyle.Render("▌") + " "
+				}
+				// Build left portion without styling widths.
+				nameFmt := fmt.Sprintf("%-*s", nameWidth, name)
+				countsFmt := counts
+				// Compute gap for right-aligned activity.
+				leftRaw := leftPad + nameWidth + 2 + len(counts) + 2 // approx raw chars
+				if i == m.projectCursor {
+					leftRaw = leftPad + nameWidth + 2 + len(counts) + 2
+				}
+				gap := m.width - leftRaw - activityWidth - rightPad
+				if gap < 1 {
+					gap = 1
+				}
+				if i == m.projectCursor {
+					nameStr := selectedRowStyle.Render(nameFmt)
+					countsStr := boldStyle.Render(countsFmt)
+					actStr := dimStyle.Render(fmt.Sprintf("%-*s", activityWidth, activityStr))
+					row = left + nameStr + "  " + countsStr + strings.Repeat(" ", gap) + actStr
+				} else {
+					actStr := dimStyle.Render(fmt.Sprintf("%-*s", activityWidth, activityStr))
+					row = left + nameFmt + "  " + countsFmt + strings.Repeat(" ", gap) + actStr
+				}
 			} else {
-				sb.WriteString("  " + fmt.Sprintf("%-28s", name) + "  " + counts + "  " + activity + "\n")
+				if i == m.projectCursor {
+					indicator := selectedRowStyle.Render("▌ ")
+					nameStr := selectedRowStyle.Render(fmt.Sprintf("%-*s", nameWidth, name))
+					countsStr := boldStyle.Render(counts)
+					actStr := dimStyle.Render(activityStr)
+					row = indicator + nameStr + "  " + countsStr + "  " + actStr
+				} else {
+					row = strings.Repeat(" ", leftPad) + fmt.Sprintf("%-*s", nameWidth, name) + "  " + counts + "  " + dimStyle.Render(activityStr)
+				}
 			}
+			content.WriteString(row + "\n")
 		}
 
 		if showDown {
-			sb.WriteString(mutedStyle.Render("  ↓ more") + "\n")
+			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↓ more") + "\n")
 		}
 	}
 
-	sb.WriteString("\n")
+	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.projectCursor, len(m.projects))
 	statusText := fmt.Sprintf("%d project(s)", len(m.projects))
 	if pos != "" {
@@ -619,19 +718,35 @@ func (m Model) viewProjects() string {
 	if m.err != nil {
 		statusText = "error: " + m.err.Error()
 	}
-	sb.WriteString(statusBarStyle.Render(statusText) + "\n")
-	sb.WriteString(m.renderFooter() + "\n")
-	return sb.String()
+	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusText)
+	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+
+	// ── compose full-height layout ───────────────────────────────────────────
+	// Content area height = terminal height − header − separator − status − footer.
+	contentRows := m.height - headerRows - statusRows
+	if contentRows < 1 {
+		contentRows = 1
+	}
+	paddedContent := padContentArea(content.String(), contentRows)
+
+	return header + "\n" +
+		separator + "\n" +
+		paddedContent + "\n" +
+		statusLine + "\n" +
+		footerLine + "\n"
 }
 
 func (m Model) viewObservations() string {
-	var sb strings.Builder
-
+	// ── chrome ──────────────────────────────────────────────────────────────
 	breadcrumb := "Projects › " + m.selectedProject
-	sb.WriteString(m.renderHeader(breadcrumb) + "\n\n")
+	header := m.renderHeader(breadcrumb)
+	separator := m.renderSeparator()
+
+	// ── content rows ────────────────────────────────────────────────────────
+	var content strings.Builder
 
 	if m.searching {
-		sb.WriteString("Search: " + m.searchInput.View() + "\n\n")
+		content.WriteString(strings.Repeat(" ", leftPad) + "Search: " + m.searchInput.View() + "\n\n")
 	}
 
 	if len(m.observations) == 0 {
@@ -641,7 +756,7 @@ func (m Model) viewObservations() string {
 		} else {
 			emptyMsg = "No observations yet."
 		}
-		sb.WriteString(dimStyle.Render(emptyMsg) + "\n")
+		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(emptyMsg) + "\n")
 	} else {
 		visible := m.listVisibleHeight(m.searching)
 		offset := m.obsOffset
@@ -649,13 +764,18 @@ func (m Model) viewObservations() string {
 
 		showUp, showDown := overflowMarkers(offset, visible, total)
 		if showUp {
-			sb.WriteString(mutedStyle.Render("  ↑ more") + "\n")
+			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
 		}
 
-		// Compute available title width: total width minus badge (12) minus age (10) minus spacing.
+		// Badge: "[type      ]" = 12 chars raw.
+		// Age column: right-aligned, ~10 chars, rightPad from edge.
+		// Title: everything in between.
+		badgeWidth := 12
+		ageWidth := 10
 		titleWidth := 50
 		if m.width > 40 {
-			titleWidth = m.width - 26 // badge(12) + spacing(4) + age(10)
+			// leftPad + badge + space + title + gap + age + rightPad = width
+			titleWidth = m.width - leftPad - badgeWidth - 1 - ageWidth - rightPad
 			if titleWidth < 10 {
 				titleWidth = 10
 			}
@@ -668,28 +788,52 @@ func (m Model) viewObservations() string {
 		for i := offset; i < end; i++ {
 			obs := m.observations[i]
 			badge := badgeStyle.Render(fmt.Sprintf("[%-10s]", truncStr(obs.Type, 10)))
-			age := dimStyle.Render(humanizeTime(parseCreatedAt(obs.CreatedAt)))
+			ageStr := humanizeTime(parseCreatedAt(obs.CreatedAt))
 			title := truncStr(obs.Title, titleWidth)
 
-			if i == m.obsCursor {
-				indicator := selectedRowStyle.Render("▌ ")
-				titleStr := selectedRowStyle.Render(fmt.Sprintf("%-*s", titleWidth, title))
-				sb.WriteString(indicator + badge + " " + titleStr + " " + age + "\n")
+			// Right-align age: pad so age ends at width-rightPad.
+			var row string
+			if m.width > 0 {
+				titleFmt := fmt.Sprintf("%-*s", titleWidth, title)
+				// Compute gap between title and age to right-align age.
+				// raw chars used so far: leftPad + badgeWidth + 1 (space) + titleWidth
+				usedLeft := leftPad + badgeWidth + 1 + titleWidth
+				gap := m.width - usedLeft - len(ageStr) - rightPad
+				if gap < 1 {
+					gap = 1
+				}
+				ageRendered := dimStyle.Render(ageStr)
+				if i == m.obsCursor {
+					indicator := selectedRowStyle.Render("▌") + " "
+					titleStr := selectedRowStyle.Render(titleFmt)
+					// Indicator occupies leftPad chars (▌ + space).
+					row = indicator + badge + " " + titleStr + strings.Repeat(" ", gap) + ageRendered
+				} else {
+					row = strings.Repeat(" ", leftPad) + badge + " " + titleFmt + strings.Repeat(" ", gap) + ageRendered
+				}
 			} else {
-				sb.WriteString("  " + badge + " " + fmt.Sprintf("%-*s", titleWidth, title) + " " + age + "\n")
+				age := dimStyle.Render(ageStr)
+				if i == m.obsCursor {
+					indicator := selectedRowStyle.Render("▌ ")
+					titleStr := selectedRowStyle.Render(fmt.Sprintf("%-*s", titleWidth, title))
+					row = indicator + badge + " " + titleStr + " " + age
+				} else {
+					row = strings.Repeat(" ", leftPad) + badge + " " + fmt.Sprintf("%-*s", titleWidth, title) + " " + age
+				}
 			}
+			content.WriteString(row + "\n")
 		}
 
 		if showDown {
-			sb.WriteString(mutedStyle.Render("  ↓ more") + "\n")
+			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↓ more") + "\n")
 		}
 	}
 
 	if m.confirmDelete {
-		sb.WriteString("\n" + confirmStyle.Render("Delete this observation? y/n") + "\n")
+		content.WriteString("\n" + strings.Repeat(" ", leftPad) + confirmStyle.Render("Delete this observation? y/n") + "\n")
 	}
 
-	sb.WriteString("\n")
+	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.obsCursor, len(m.observations))
 	statusText := m.selectedProject + " — " + fmt.Sprintf("%d observation(s)", len(m.observations))
 	if pos != "" {
@@ -705,9 +849,21 @@ func (m Model) viewObservations() string {
 	if m.err != nil {
 		statusText = "error: " + m.err.Error()
 	}
-	sb.WriteString(statusBarStyle.Render(statusText) + "\n")
-	sb.WriteString(m.renderFooter() + "\n")
-	return sb.String()
+	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusText)
+	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+
+	// ── compose full-height layout ───────────────────────────────────────────
+	contentRows := m.height - headerRows - statusRows
+	if contentRows < 1 {
+		contentRows = 1
+	}
+	paddedContent := padContentArea(content.String(), contentRows)
+
+	return header + "\n" +
+		separator + "\n" +
+		paddedContent + "\n" +
+		statusLine + "\n" +
+		footerLine + "\n"
 }
 
 func (m Model) viewDetail() string {
@@ -715,35 +871,46 @@ func (m Model) viewDetail() string {
 		return ""
 	}
 	obs := m.selectedObs
-	var sb strings.Builder
 
+	// ── chrome ──────────────────────────────────────────────────────────────
 	breadcrumb := "Projects › " + m.selectedProject + " › detail"
-	sb.WriteString(m.renderHeader(breadcrumb) + "\n\n")
+	header := m.renderHeader(breadcrumb)
+	separator := m.renderSeparator()
 
-	// Metadata block.
-	sb.WriteString(selectedRowStyle.Render(obs.Title) + "\n")
-	sb.WriteString(dimStyle.Render(fmt.Sprintf("type: %s  project: %s  scope: %s", obs.Type, obs.Project, obs.Scope)) + "\n")
+	// ── content rows ────────────────────────────────────────────────────────
+	var content strings.Builder
+
+	// Metadata block — count these lines so viewport height stays consistent.
+	content.WriteString(strings.Repeat(" ", leftPad) + selectedRowStyle.Render(obs.Title) + "\n")
+	content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(fmt.Sprintf("type: %s  project: %s  scope: %s", obs.Type, obs.Project, obs.Scope)) + "\n")
+	metaLines := 2
 	if obs.TopicKey != nil && *obs.TopicKey != "" {
-		sb.WriteString(dimStyle.Render("topic_key: "+*obs.TopicKey) + "\n")
+		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render("topic_key: "+*obs.TopicKey) + "\n")
+		metaLines++
 	}
 	if obs.SyncID != "" {
-		sb.WriteString(mutedStyle.Render("sync_id: "+obs.SyncID) + "\n")
+		content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("sync_id: "+obs.SyncID) + "\n")
+		metaLines++
 	}
-	sb.WriteString(dimStyle.Render(fmt.Sprintf("created: %s  updated: %s", obs.CreatedAt, obs.UpdatedAt)) + "\n")
-	// Horizontal rule.
+	content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(fmt.Sprintf("created: %s  updated: %s", obs.CreatedAt, obs.UpdatedAt)) + "\n")
+	metaLines++
+	// Horizontal rule inside the content area.
 	ruleWidth := m.width
 	if ruleWidth < 1 {
 		ruleWidth = 40
 	}
-	sb.WriteString(mutedStyle.Render(strings.Repeat("─", ruleWidth)) + "\n")
+	content.WriteString(mutedStyle.Render(strings.Repeat("─", ruleWidth)) + "\n")
+	metaLines++ // rule counts as one content line
 
-	sb.WriteString(m.vp.View())
+	_ = metaLines // used only for documentation; viewport height is set in Update
+
+	content.WriteString(m.vp.View())
 
 	if m.confirmDelete {
-		sb.WriteString("\n" + confirmStyle.Render("Delete this observation? y/n") + "\n")
+		content.WriteString("\n" + strings.Repeat(" ", leftPad) + confirmStyle.Render("Delete this observation? y/n") + "\n")
 	}
 
-	sb.WriteString("\n")
+	// ── status and footer ────────────────────────────────────────────────────
 	statusText := fmt.Sprintf("observation #%d", obs.ID)
 	if m.vp.TotalLineCount() > 0 {
 		statusText += fmt.Sprintf("  %.0f%%", m.vp.ScrollPercent()*100)
@@ -753,9 +920,21 @@ func (m Model) viewDetail() string {
 	if m.err != nil {
 		statusText = "error: " + m.err.Error()
 	}
-	sb.WriteString(statusBarStyle.Render(statusText) + "\n")
-	sb.WriteString(m.renderFooter() + "\n")
-	return sb.String()
+	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusText)
+	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+
+	// ── compose full-height layout ───────────────────────────────────────────
+	contentRows := m.height - headerRows - statusRows
+	if contentRows < 1 {
+		contentRows = 1
+	}
+	paddedContent := padContentArea(content.String(), contentRows)
+
+	return header + "\n" +
+		separator + "\n" +
+		paddedContent + "\n" +
+		statusLine + "\n" +
+		footerLine + "\n"
 }
 
 // ─── commands ────────────────────────────────────────────────────────────────
