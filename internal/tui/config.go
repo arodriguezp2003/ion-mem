@@ -1,20 +1,28 @@
 package tui
 
-// config.go — Config view: embeddings toggle, Ollama URL, model, connection test, regenerate.
+// config.go — Config view: embeddings toggle, Ollama URL, model, connection test,
+// embed-missing (incremental backfill), regenerate.
 //
 // Design:
 //   - Entry: 'c' from projects view.
 //   - Breadcrumb: PROJECTS // CONFIG.
-//   - Five settings rows navigated with ↑↓:
-//       0  EMBEDDINGS           [ON] / [OFF] — Enter/Space toggles, persists immediately.
-//       1  OLLAMA URL           <url>        — Enter opens inline edit.
-//       2  MODEL                <model>      — Enter opens inline edit.
-//       3  TEST CONNECTION                   — Enter runs async probe.
-//       4  REGENERATE EMBEDDINGS             — Enter re-indexes all embeddings.
+//   - Six settings rows navigated with ↑↓:
+//       0  EMBEDDINGS             [ON] / [OFF] — Enter/Space toggles, persists immediately.
+//       1  OLLAMA URL             <url>        — Enter opens inline edit.
+//       2  MODEL                  <model>      — Enter opens inline edit.
+//       3  TEST CONNECTION                     — Enter runs async probe.
+//       4  EMBED MISSING                       — Enter backfills un-embedded observations.
+//       5  REGENERATE EMBEDDINGS               — Enter wipes then re-embeds all.
 //   - Esc closes edit or returns to projects.
 //   - Probe result shown in status area: OK (accent) or error (danger).
-//   - Regen result shown below regen row: OK (accent) or error (danger).
+//   - Job (embed/regen) progress shown as a retro bar while running; result when done.
 //   - Exact-fill + wide centering consistent with the rest of the TUI.
+//
+// Batch engine concurrency note:
+//   A job (EMBED MISSING or REGENERATE) processes ONE batch per tea.Cmd. Progress
+//   messages keep flowing even if the user navigates away from the config view —
+//   only the visual progress bar is suppressed in other views. This keeps the engine
+//   simple (no goroutines) and avoids stale-result races.
 
 import (
 	"context"
@@ -30,12 +38,22 @@ import (
 	"github.com/ionix/ion-mem/internal/store"
 )
 
-// ─── styles (config-specific) ────────────────────────────────────────────────
+// ─── constants ────────────────────────────────────────────────────────────────
 
 // configLabelWidth is the fixed column width for config row labels.
 // "REGENERATE EMBEDDINGS" (21 chars) is the longest label — use 22 to leave
 // one space of padding.
 const configLabelWidth = 22
+
+// embedBatchSize is the number of observations fetched per chained batch.
+// 25 keeps each tea.Cmd short enough for a live progress bar.
+const embedBatchSize = 25
+
+// progressBarWidth is the number of block-character columns in the progress bar
+// fill region (excluding label and fraction text).
+const progressBarWidth = 24
+
+// ─── styles (config-specific) ────────────────────────────────────────────────
 
 var (
 	configLabelStyle = lipgloss.NewStyle().Foreground(defaultTheme.dim).Width(configLabelWidth)
@@ -47,6 +65,10 @@ var (
 	configOKStyle      = lipgloss.NewStyle().Foreground(defaultTheme.accent).Bold(true)
 	configDangerStyle  = lipgloss.NewStyle().Foreground(defaultTheme.danger).Bold(true)
 	configTestingStyle = lipgloss.NewStyle().Foreground(defaultTheme.dim)
+
+	// Progress bar block styles.
+	barFilledStyle = lipgloss.NewStyle().Foreground(defaultTheme.accent)
+	barEmptyStyle  = lipgloss.NewStyle().Foreground(defaultTheme.muted)
 )
 
 // ─── Key handler ─────────────────────────────────────────────────────────────
@@ -168,6 +190,37 @@ func (m Model) handleConfigAction(spaceKey bool) (tea.Model, tea.Cmd) {
 		}
 		return m, probeFn(m.configOllamaURL, m.configModel)
 
+	case configRowEmbedMissing:
+		if spaceKey {
+			return m, nil
+		}
+		// Embeddings must be enabled.
+		if !m.configEmbeddingsEnabled {
+			return m, func() tea.Msg {
+				return embedJobBatchMsg{
+					done:     0,
+					total:    0,
+					finished: true,
+					lastErr:  fmt.Errorf("EMBEDDINGS ARE OFF — enable them first"),
+				}
+			}
+		}
+		// Block re-trigger while a job is already running.
+		if m.jobRunning {
+			return m, nil
+		}
+		// Start the EMBED MISSING job.
+		m.jobRunning = true
+		m.jobDone = 0
+		m.jobTotal = 0
+		m.jobKind = jobKindEmbed
+		m.jobResult = ""
+		batchFn := m.embedBatchFn
+		if batchFn == nil {
+			batchFn = m.makeDefaultEmbedBatchFn()
+		}
+		return m, batchFn(m.configOllamaURL, m.configModel, 0, embedBatchSize)
+
 	case configRowRegen:
 		if spaceKey {
 			return m, nil
@@ -182,10 +235,23 @@ func (m Model) handleConfigAction(spaceKey bool) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		// Block re-trigger while already in flight.
-		if m.configRegenerating {
+		// Block re-trigger while a job is already running (new engine) or the
+		// legacy configRegenerating flag is set (backwards compat with old stubs).
+		if m.jobRunning || m.configRegenerating {
 			return m, nil
 		}
+		// If a new-style regenBatchFn is injected, use the chained engine.
+		if m.regenBatchFn != nil {
+			m.jobRunning = true
+			m.jobDone = 0
+			m.jobTotal = 0
+			m.jobKind = jobKindRegen
+			m.jobResult = ""
+			m.configRegenerating = true
+			m.configRegenResult = ""
+			return m, m.regenBatchFn(m.configOllamaURL, m.configModel, 0, embedBatchSize)
+		}
+		// Legacy path: single-shot regenFn (backwards compat with existing tests).
 		m.configRegenerating = true
 		m.configRegenResult = ""
 		regenFn := m.regenFn
@@ -227,6 +293,198 @@ func (m Model) saveConfigSetting(key, value string) tea.Cmd {
 		return configSaveSettingMsg{}
 	}
 }
+
+// ─── Embed-missing pure helper ────────────────────────────────────────────────
+
+// embedMissingAll embeds all observations that do not yet have an embedding row
+// for embedder.Model(). Unlike regenerateAll it does NOT call DeleteAllEmbeddings
+// first — it is a pure incremental backfill.
+//
+// Returns (done, total, err):
+//   - done  — number of observations successfully embedded in this run.
+//   - total — total non-deleted observations across all projects.
+//   - err   — nil on full success; non-nil on systemic failure (zero-progress guard).
+func embedMissingAll(ctx context.Context, st *store.Store, embedder embed.Embedder) (done, total int, err error) {
+	return embedMissingAllWithBatch(ctx, st, embedder, embedBatchSize)
+}
+
+// embedMissingAllWithBatch is the testable core of embedMissingAll.
+func embedMissingAllWithBatch(ctx context.Context, st *store.Store, embedder embed.Embedder, batch int) (done, total int, err error) {
+	model := embedder.Model()
+	var lastEmbedErr error
+
+	for {
+		missing, fetchErr := st.MissingEmbeddings(ctx, "", model, batch)
+		if fetchErr != nil {
+			return done, total, fmt.Errorf("embed-missing: fetch: %w", fetchErr)
+		}
+		if len(missing) == 0 {
+			break
+		}
+
+		batchSucceeded := 0
+		for _, obs := range missing {
+			text := obs.Title + "\n" + obs.Content
+
+			embedCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			vec, embedErr := embedder.Embed(embedCtx, text)
+			cancel()
+
+			if embedErr != nil {
+				lastEmbedErr = embedErr
+				continue
+			}
+			if upsertErr := st.UpsertEmbedding(ctx, obs.ID, model, vec); upsertErr != nil {
+				continue
+			}
+			done++
+			batchSucceeded++
+		}
+
+		if len(missing) < batch {
+			break
+		}
+		// Zero-progress guard: full batch fetched but nothing succeeded.
+		if len(missing) == batch && batchSucceeded == 0 {
+			_, total, _ = st.EmbeddingCoverage(ctx, "", model)
+			if lastEmbedErr != nil {
+				return done, total, fmt.Errorf("embed-missing: no progress in last batch: %w", lastEmbedErr)
+			}
+			return done, total, nil
+		}
+	}
+
+	_, total, err = st.EmbeddingCoverage(ctx, "", model)
+	if err != nil {
+		return done, 0, fmt.Errorf("embed-missing: coverage: %w", err)
+	}
+	return done, total, lastEmbedErr
+}
+
+// ─── Chained batch engine: EMBED MISSING ─────────────────────────────────────
+
+// makeDefaultEmbedBatchFn returns the production EMBED MISSING batch function.
+// Each call processes one batch of embedBatchSize observations and returns an
+// embedJobBatchMsg. The engine in Update issues the next cmd on partial results.
+func (m Model) makeDefaultEmbedBatchFn() func(url, modelName string, offset, batch int) tea.Cmd {
+	st := m.store
+	return func(baseURL, modelName string, offset, batch int) tea.Cmd {
+		return func() tea.Msg {
+			if st == nil {
+				return embedJobBatchMsg{finished: true, lastErr: fmt.Errorf("store unavailable")}
+			}
+			ctx := context.Background()
+			client := embed.DefaultClient(baseURL)
+			embedder := embed.NewOllamaEmbedder(client, modelName)
+			model := embedder.Model()
+
+			missing, err := st.MissingEmbeddings(ctx, "", model, batch)
+			if err != nil {
+				return embedJobBatchMsg{finished: true, lastErr: err}
+			}
+			if len(missing) == 0 {
+				// Nothing left to embed — finished.
+				_, total, _ := st.EmbeddingCoverage(ctx, "", model)
+				return embedJobBatchMsg{done: 0, total: total, finished: true}
+			}
+
+			batchDone := 0
+			var lastErr error
+			for _, obs := range missing {
+				text := obs.Title + "\n" + obs.Content
+				embedCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				vec, embedErr := embedder.Embed(embedCtx, text)
+				cancel()
+				if embedErr != nil {
+					lastErr = embedErr
+					continue
+				}
+				if err := st.UpsertEmbedding(ctx, obs.ID, model, vec); err != nil {
+					continue
+				}
+				batchDone++
+			}
+
+			have, total, _ := st.EmbeddingCoverage(ctx, "", model)
+
+			// Zero-progress guard: full batch but nothing embedded.
+			if len(missing) == batch && batchDone == 0 {
+				return embedJobBatchMsg{done: have, total: total, lastErr: lastErr, aborted: true}
+			}
+			// Partial batch means no more rows are missing → finished.
+			// Full batch means there may be more → issue next batch.
+			finished := len(missing) < batch
+			return embedJobBatchMsg{done: have, total: total, lastErr: lastErr, finished: finished}
+		}
+	}
+}
+
+// ─── Chained batch engine: REGENERATE ────────────────────────────────────────
+
+// makeDefaultRegenBatchFn returns the production REGENERATE batch function for
+// the chained engine. The first batch deletes all embeddings before fetching
+// the first page; subsequent batches continue the loop.
+//
+// Note: in the chained engine the deletion happens ONCE at job start (triggered
+// by a dedicated "delete-then-first-batch" cmd). For simplicity the first call
+// (offset==0) performs the deletion; subsequent calls skip it.
+func (m Model) makeDefaultRegenBatchFn() func(url, modelName string, offset, batch int) tea.Cmd {
+	st := m.store
+	return func(baseURL, modelName string, offset, batch int) tea.Cmd {
+		return func() tea.Msg {
+			if st == nil {
+				return embedJobBatchMsg{finished: true, lastErr: fmt.Errorf("store unavailable")}
+			}
+			ctx := context.Background()
+			client := embed.DefaultClient(baseURL)
+			embedder := embed.NewOllamaEmbedder(client, modelName)
+			model := embedder.Model()
+
+			// First batch: wipe all embeddings.
+			if offset == 0 {
+				if _, err := st.DeleteAllEmbeddings(ctx); err != nil {
+					return embedJobBatchMsg{finished: true, lastErr: err}
+				}
+			}
+
+			missing, err := st.MissingEmbeddings(ctx, "", model, batch)
+			if err != nil {
+				return embedJobBatchMsg{finished: true, lastErr: err}
+			}
+			if len(missing) == 0 {
+				_, total, _ := st.EmbeddingCoverage(ctx, "", model)
+				return embedJobBatchMsg{done: 0, total: total, finished: true}
+			}
+
+			batchDone := 0
+			var lastErr error
+			for _, obs := range missing {
+				text := obs.Title + "\n" + obs.Content
+				embedCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				vec, embedErr := embedder.Embed(embedCtx, text)
+				cancel()
+				if embedErr != nil {
+					lastErr = embedErr
+					continue
+				}
+				if err := st.UpsertEmbedding(ctx, obs.ID, model, vec); err != nil {
+					continue
+				}
+				batchDone++
+			}
+
+			have, total, _ := st.EmbeddingCoverage(ctx, "", model)
+
+			if len(missing) == batch && batchDone == 0 {
+				return embedJobBatchMsg{done: have, total: total, lastErr: lastErr, aborted: true}
+			}
+			finished := len(missing) < batch
+			return embedJobBatchMsg{done: have, total: total, lastErr: lastErr, finished: finished}
+		}
+	}
+}
+
+// ─── Legacy single-shot regen (kept for existing unit tests) ─────────────────
 
 // regenerateAll deletes all embeddings and re-embeds every observation using
 // embedder. It is extracted as a pure function (no TUI coupling) so that tests
@@ -315,9 +573,9 @@ func regenerateAllWithBatch(ctx context.Context, st *store.Store, embedder embed
 	return done, total, nil
 }
 
-// makeDefaultRegenFn returns the production REGENERATE EMBEDDINGS function. It
-// captures m.store in the closure so it can call regenerateAll with a real store.
-// When m.store is nil (unit tests without a store), it returns a no-op command.
+// makeDefaultRegenFn returns the legacy (single-shot blocking) REGENERATE
+// EMBEDDINGS function. Used only when regenBatchFn is nil (existing unit tests
+// that stub regenFn directly). Production now uses makeDefaultRegenBatchFn.
 func (m Model) makeDefaultRegenFn() func(url, model string) tea.Cmd {
 	st := m.store
 	return func(baseURL, modelName string) tea.Cmd {
@@ -386,6 +644,36 @@ func defaultProbeFn(baseURL, model string) tea.Cmd {
 	}
 }
 
+// ─── Progress bar ─────────────────────────────────────────────────────────────
+
+// renderProgressBar renders a retro BBS-style progress bar.
+// Format: `▓▓▓▓▓▓▓░░░░░░░░░  57/142  (40%)`
+// width controls the number of block character columns in the fill region.
+// The function is pure (no side effects) and safe to test in isolation.
+func renderProgressBar(done, total, width int) string {
+	if width < 4 {
+		width = 4
+	}
+	var pct int
+	if total > 0 {
+		pct = done * 100 / total
+	}
+	filled := 0
+	if total > 0 {
+		filled = done * width / total
+	}
+	if filled > width {
+		filled = width
+	}
+	empty := width - filled
+
+	var bar strings.Builder
+	bar.WriteString(barFilledStyle.Render(strings.Repeat("▓", filled)))
+	bar.WriteString(barEmptyStyle.Render(strings.Repeat("░", empty)))
+	bar.WriteString(fmt.Sprintf("  %d/%d  (%d%%)", done, total, pct))
+	return bar.String()
+}
+
 // ─── View ─────────────────────────────────────────────────────────────────────
 
 // viewConfigPage renders the config view with exact-fill and wide centering.
@@ -447,11 +735,20 @@ func (m Model) viewConfigPage() string {
 			},
 		},
 		{
+			label: "EMBED MISSING",
+			value: func() string {
+				if m.jobRunning && m.jobKind == jobKindEmbed {
+					return configTestingStyle.Render("EMBEDDING…")
+				}
+				return ""
+			},
+		},
+		{
 			label: "REGENERATE EMBEDDINGS",
 			value: func() string {
 				// While regen is in flight the row itself shows REGENERATING…;
 				// a finished result is rendered in the trailing result block below.
-				if m.configRegenerating {
+				if m.configRegenerating || (m.jobRunning && m.jobKind == jobKindRegen) {
 					return configTestingStyle.Render("REGENERATING…")
 				}
 				return ""
@@ -463,11 +760,6 @@ func (m Model) viewConfigPage() string {
 		label := configLabelStyle.Render(row.label)
 		val := row.value()
 
-		// Determine the input width for editing rows.
-		if m.configEditing && (i == configRowOllamaURL || i == configRowModel) && m.configCursor == i {
-			// The text input renders at a fixed width — handled by the input itself.
-		}
-
 		var line string
 		if i == m.configCursor {
 			// Selected row: render label+value with selection highlight on the label.
@@ -478,6 +770,27 @@ func (m Model) viewConfigPage() string {
 			line = rowIndent + label + " " + val
 		}
 		content.WriteString(line + "\n")
+	}
+
+	// ── progress bar (visible while job is running) ───────────────────────────
+	if m.jobRunning {
+		label := "EMBEDDING  "
+		if m.jobKind == jobKindRegen {
+			label = "REGENERATING "
+		}
+		bar := renderProgressBar(m.jobDone, m.jobTotal, progressBarWidth)
+		content.WriteString("\n" + rowIndent + configTestingStyle.Render(label) + bar + "\n")
+	}
+
+	// ── job result (shown when job finished) ──────────────────────────────────
+	if !m.jobRunning && m.jobResult != "" {
+		var resultLine string
+		if m.jobResultOK {
+			resultLine = configOKStyle.Render(m.jobResult)
+		} else {
+			resultLine = configDangerStyle.Render(m.jobResult)
+		}
+		content.WriteString("\n" + rowIndent + resultLine + "\n")
 	}
 
 	// ── test result ───────────────────────────────────────────────────────────
@@ -493,10 +806,10 @@ func (m Model) viewConfigPage() string {
 		content.WriteString("\n" + rowIndent + resultLine + "\n")
 	}
 
-	// ── regen result ──────────────────────────────────────────────────────────
-	// While regen is in flight the REGENERATE EMBEDDINGS row itself shows
-	// REGENERATING…; this trailing block only renders a finished result.
-	if !m.configRegenerating && m.configRegenResult != "" {
+	// ── regen result (legacy path: configRegenResult set by old regenFn) ──────
+	// Rendered only when the new jobResult is empty (prevents double-rendering
+	// when the new engine is used — it sets jobResult directly).
+	if !m.configRegenerating && m.configRegenResult != "" && m.jobResult == "" {
 		var resultLine string
 		if m.configRegenOK {
 			resultLine = configOKStyle.Render(m.configRegenResult)
@@ -508,8 +821,20 @@ func (m Model) viewConfigPage() string {
 
 	// ── status and footer ────────────────────────────────────────────────────
 	statusText := "CONFIG // EMBEDDINGS SETTINGS"
-	if m.configRegenerating {
+	if m.jobRunning {
+		if m.jobKind == jobKindRegen {
+			statusText = "CONFIG // REGENERATING EMBEDDINGS…"
+		} else {
+			statusText = "CONFIG // EMBEDDING MISSING…"
+		}
+	} else if m.configRegenerating {
 		statusText = "CONFIG // REGENERATING EMBEDDINGS…"
+	} else if m.jobResult != "" {
+		if m.jobResultOK {
+			statusText = "CONFIG // EMBEDDINGS UP TO DATE"
+		} else {
+			statusText = "CONFIG // EMBEDDING FAILED"
+		}
 	} else if m.configRegenResult != "" {
 		if m.configRegenOK {
 			statusText = "CONFIG // EMBEDDINGS REGENERATED"

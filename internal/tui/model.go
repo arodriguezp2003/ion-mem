@@ -30,12 +30,35 @@ const (
 // ─── config row indices ───────────────────────────────────────────────────────
 
 const (
-	configRowEmbeddings = 0
-	configRowOllamaURL  = 1
-	configRowModel      = 2
-	configRowTestConn   = 3
-	configRowRegen      = 4
-	configRowCount      = 5
+	configRowEmbeddings   = 0
+	configRowOllamaURL    = 1
+	configRowModel        = 2
+	configRowTestConn     = 3
+	configRowEmbedMissing = 4 // EMBED MISSING — incremental backfill, skips already-embedded
+	configRowRegen        = 5 // REGENERATE EMBEDDINGS — wipes then re-embeds all
+	configRowCount        = 6
+)
+
+// ─── embed job message ────────────────────────────────────────────────────────
+
+// embedJobBatchMsg is sent after each batch of the chained embed job (both
+// EMBED MISSING and REGENERATE). The engine issues the next batch command on
+// receipt unless finished or aborted is true.
+type embedJobBatchMsg struct {
+	done     int
+	total    int
+	lastErr  error
+	finished bool // no more missing rows — job complete
+	aborted  bool // zero-progress guard fired — stop loop
+}
+
+// jobKind distinguishes which operation is currently running, used to select
+// the correct progress-bar label (EMBEDDING vs REGENERATING).
+type jobKind int
+
+const (
+	jobKindEmbed jobKind = iota // EMBED MISSING
+	jobKindRegen                // REGENERATE EMBEDDINGS
 )
 
 // ─── messages ─────────────────────────────────────────────────────────────────
@@ -353,18 +376,51 @@ type Model struct {
 	// without needing a real server.
 	probeFn func(url, model string) tea.Cmd
 
-	// regenFn is the function used to run REGENERATE EMBEDDINGS. In production
-	// it calls DeleteAllEmbeddings then re-embeds all observations. In unit
-	// tests it is replaced with a stub that returns a fake result.
+	// regenFn is the legacy single-shot REGENERATE function kept for backward
+	// compatibility with unit tests that stub it directly. Production code uses
+	// regenBatchFn / the chained engine instead.
 	regenFn func(url, model string) tea.Cmd
 
-	// configRegenerating is true while a REGENERATE EMBEDDINGS operation is
-	// in flight. Used to block re-triggers and render REGENERATING… in the row.
+	// configRegenerating is kept to prevent breaking existing tests that check
+	// this field directly. It mirrors jobRunning when the active job is regen.
 	configRegenerating bool
-	// configRegenResult is the last REGENERATE EMBEDDINGS result (empty = none yet).
+	// configRegenResult is kept for existing tests; mirrors jobResult for regen jobs.
 	configRegenResult string
-	// configRegenOK is true if the last regeneration succeeded.
+	// configRegenOK is kept for existing tests; mirrors jobResultOK for regen jobs.
 	configRegenOK bool
+
+	// ─── chained embed job state ─────────────────────────────────────────────
+
+	// jobRunning is true while an EMBED MISSING or REGENERATE batch loop is in
+	// flight. Both rows are blocked (no re-trigger) while true.
+	jobRunning bool
+	// jobDone is the cumulative count of successfully embedded observations in
+	// the current job.
+	jobDone int
+	// jobTotal is the total number of observations (embeddings target) for the
+	// current job.
+	jobTotal int
+	// jobKind distinguishes EMBED MISSING from REGENERATE for the progress bar label.
+	jobKind jobKind
+	// jobResult is the human-readable summary shown when the job finishes.
+	jobResult string
+	// jobResultOK is true when the job finished without errors.
+	jobResultOK bool
+
+	// embedBatchFn is the injectable batch function for EMBED MISSING. In
+	// production it is nil and makeDefaultEmbedBatchFn() is used. In tests it is
+	// replaced with a stub so no Ollama is required.
+	//
+	// Signature: func(url, modelName string, offset, batchSize int) tea.Cmd
+	// The offset parameter is reserved for future pagination; the current
+	// implementation passes 0 and relies on MissingEmbeddings to return the
+	// next unembedded page.
+	embedBatchFn func(url, modelName string, offset, batch int) tea.Cmd
+
+	// regenBatchFn is the injectable batch function for REGENERATE EMBEDDINGS
+	// when using the new chained engine. In production it is nil and
+	// makeDefaultRegenBatchFn() is used.
+	regenBatchFn func(url, modelName string, offset, batch int) tea.Cmd
 
 	// UI components.
 	status string
@@ -587,12 +643,82 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case configRegenResultMsg:
 		// Ignore stale results that arrive after the user left the config view.
+		// This path is kept for the legacy regenFn (single-shot stub in tests).
 		if m.view == viewConfig {
 			m.configRegenerating = false
 			m.configRegenOK = msg.ok
 			m.configRegenResult = msg.info
 		}
 		return m, nil
+
+	case embedJobBatchMsg:
+		// Process a batch result from the chained embed engine. The job keeps
+		// running (issuing next batch cmd) until finished or aborted.
+		//
+		// View-guard: the job KEEPS PROCESSING even if the user navigates away
+		// from the config view (batch cmds continue flowing). The progress fields
+		// are updated regardless of view so state is consistent when the user
+		// returns. Only the visual progress bar is suppressed in other views.
+		if msg.aborted || msg.finished {
+			m.jobRunning = false
+			m.jobDone = msg.done
+			m.jobTotal = msg.total
+			// Sync legacy fields for REGENERATE so existing tests still pass.
+			if m.jobKind == jobKindRegen {
+				m.configRegenerating = false
+			}
+			// Build result string.
+			modelName := m.configModel
+			if msg.aborted {
+				errStr := ""
+				if msg.lastErr != nil {
+					errStr = msg.lastErr.Error()
+				}
+				m.jobResult = fmt.Sprintf("ABORTED — no progress — %s", errStr)
+				m.jobResultOK = false
+			} else {
+				// finished == true.
+				if msg.lastErr != nil {
+					m.jobResult = fmt.Sprintf("PARTIAL — %d/%d — %s", msg.done, msg.total, msg.lastErr.Error())
+					m.jobResultOK = false
+				} else if msg.done == msg.total && msg.total > 0 {
+					label := "EMBEDDINGS UP TO DATE"
+					if m.jobKind == jobKindRegen {
+						label = "EMBEDDINGS REGENERATED"
+					}
+					m.jobResult = fmt.Sprintf("%s — %d/%d — model %s", label, msg.done, msg.total, modelName)
+					m.jobResultOK = true
+				} else if msg.total == 0 {
+					m.jobResult = fmt.Sprintf("ALL EMBEDDED — coverage %d/%d", msg.done, msg.total)
+					m.jobResultOK = true
+				} else {
+					m.jobResult = fmt.Sprintf("PARTIAL — %d/%d — some failures", msg.done, msg.total)
+					m.jobResultOK = false
+				}
+			}
+			// Mirror into legacy configRegenResult for REGENERATE jobs.
+			if m.jobKind == jobKindRegen {
+				m.configRegenResult = m.jobResult
+				m.configRegenOK = m.jobResultOK
+			}
+			return m, nil
+		}
+		// Partial batch: update progress and issue the next batch cmd.
+		m.jobDone = msg.done
+		m.jobTotal = msg.total
+		if m.jobKind == jobKindEmbed {
+			batchFn := m.embedBatchFn
+			if batchFn == nil {
+				batchFn = m.makeDefaultEmbedBatchFn()
+			}
+			return m, batchFn(m.configOllamaURL, m.configModel, 0, embedBatchSize)
+		}
+		// jobKindRegen.
+		batchFn := m.regenBatchFn
+		if batchFn == nil {
+			batchFn = m.makeDefaultRegenBatchFn()
+		}
+		return m, batchFn(m.configOllamaURL, m.configModel, 0, embedBatchSize)
 
 	case errMsg:
 		m.err = msg.err

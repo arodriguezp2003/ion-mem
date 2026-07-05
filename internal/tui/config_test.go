@@ -156,14 +156,17 @@ func TestConfig_CursorDoesNotGoNegative(t *testing.T) {
 
 func TestConfig_CursorDoesNotExceedLastRow(t *testing.T) {
 	m := newConfigModel()
-	// Move to last row
+	// Move to last row (configRowCount-1 = 5).
 	for i := 0; i < 10; i++ {
 		m = sendKey(m, tea.KeyDown)
 	}
 	last := m.configCursor
+	if last != configRowCount-1 {
+		t.Errorf("expected cursor to clamp at last row %d, got %d", configRowCount-1, last)
+	}
 	m = sendKey(m, tea.KeyDown)
 	if m.configCursor != last {
-		t.Errorf("cursor should clamp at last row %d, got %d", last, m.configCursor)
+		t.Errorf("cursor should not move past last row %d, got %d", last, m.configCursor)
 	}
 }
 
@@ -397,29 +400,29 @@ func TestConfig_RenderSmoke_Wide_200x55(t *testing.T) {
 
 // ─── 20–30. REGENERATE EMBEDDINGS row ────────────────────────────────────────
 
-// 20. configRowRegen constant exists and is at index 4 (after TEST CONNECTION).
+// 20. configRowRegen constant exists and is at index 5 (after EMBED MISSING at 4).
 func TestConfig_RegenRowConstant(t *testing.T) {
-	if configRowRegen != 4 {
-		t.Errorf("configRowRegen = %d, want 4", configRowRegen)
+	if configRowRegen != 5 {
+		t.Errorf("configRowRegen = %d, want 5 (shifted after EMBED MISSING insert)", configRowRegen)
 	}
-	if configRowCount != 5 {
-		t.Errorf("configRowCount = %d, want 5", configRowCount)
+	if configRowCount != 6 {
+		t.Errorf("configRowCount = %d, want 6", configRowCount)
 	}
 }
 
-// 21. ↓↓↓↓ from row 0 lands on configRowRegen (row 4).
+// 21. ↓↓↓↓↓ from row 0 lands on configRowRegen (row 5).
 func TestConfig_CursorCanReachRegenRow(t *testing.T) {
 	m := newConfigModel()
 	m.configCursor = 0
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		m = sendKey(m, tea.KeyDown)
 	}
 	if m.configCursor != configRowRegen {
-		t.Errorf("after 4×↓ from row 0, configCursor = %d, want %d", m.configCursor, configRowRegen)
+		t.Errorf("after 5×↓ from row 0, configCursor = %d, want %d", m.configCursor, configRowRegen)
 	}
 }
 
-// 22. Cursor does not go beyond row 4.
+// 22. Cursor does not go beyond row 5.
 func TestConfig_CursorDoesNotExceedRegenRow(t *testing.T) {
 	m := newConfigModel()
 	for i := 0; i < 10; i++ {
