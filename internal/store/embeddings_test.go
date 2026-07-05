@@ -236,6 +236,87 @@ func TestMissingEmbeddings_ReturnsObsWithoutEmbedding(t *testing.T) {
 	}
 }
 
+// ─── DeleteAllEmbeddings ─────────────────────────────────────────────────────
+
+func TestDeleteAllEmbeddings_RemovesAllRows(t *testing.T) {
+	ctx := context.Background()
+	st := mustOpen(t)
+	proj := "all-del-proj"
+	model := "nomic-embed-text"
+
+	id1 := seedObsForEmbed(t, st, "all-del-1", proj)
+	id2 := seedObsForEmbed(t, st, "all-del-2", proj)
+
+	if err := st.UpsertEmbedding(ctx, id1, model, []float32{0.1, 0.2}); err != nil {
+		t.Fatalf("UpsertEmbedding id1: %v", err)
+	}
+	if err := st.UpsertEmbedding(ctx, id2, model, []float32{0.3, 0.4}); err != nil {
+		t.Fatalf("UpsertEmbedding id2: %v", err)
+	}
+
+	n, err := st.DeleteAllEmbeddings(ctx)
+	if err != nil {
+		t.Fatalf("DeleteAllEmbeddings: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("DeleteAllEmbeddings rows affected = %d, want 2", n)
+	}
+
+	// After delete, VectorSearch should find nothing.
+	results, err := st.VectorSearch(ctx, []float32{0.1, 0.2}, store.SearchParams{Project: proj, Limit: 5})
+	if err != nil {
+		t.Fatalf("VectorSearch after DeleteAllEmbeddings: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("VectorSearch after DeleteAllEmbeddings: got %d results, want 0", len(results))
+	}
+}
+
+func TestDeleteAllEmbeddings_EmptyTableReturnsZero(t *testing.T) {
+	ctx := context.Background()
+	st := mustOpen(t)
+
+	n, err := st.DeleteAllEmbeddings(ctx)
+	if err != nil {
+		t.Fatalf("DeleteAllEmbeddings on empty table: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("DeleteAllEmbeddings on empty table: got %d, want 0", n)
+	}
+}
+
+func TestMissingEmbeddings_EmptyProjectReturnsAllProjects(t *testing.T) {
+	ctx := context.Background()
+	st := mustOpen(t)
+	model := "nomic-embed-text"
+
+	// Seed observations in two different projects.
+	id1 := seedObsForEmbed(t, st, "ap-1", "proj-alpha")
+	id2 := seedObsForEmbed(t, st, "ap-2", "proj-beta")
+	// Embed only id1.
+	if err := st.UpsertEmbedding(ctx, id1, model, []float32{0.1}); err != nil {
+		t.Fatalf("UpsertEmbedding: %v", err)
+	}
+
+	// Empty project = all projects: id2 should appear as missing.
+	missing, err := st.MissingEmbeddings(ctx, "", model, 100)
+	if err != nil {
+		t.Fatalf("MissingEmbeddings all-projects: %v", err)
+	}
+	found := false
+	for _, obs := range missing {
+		if obs.ID == id2 {
+			found = true
+		}
+		if obs.ID == id1 {
+			t.Error("MissingEmbeddings: id1 (embedded) should not appear")
+		}
+	}
+	if !found {
+		t.Error("MissingEmbeddings all-projects: id2 (not embedded) should appear")
+	}
+}
+
 // ─── VectorSearch ─────────────────────────────────────────────────────────────
 
 func TestVectorSearch_ReturnsClosestFirst(t *testing.T) {

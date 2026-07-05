@@ -83,6 +83,21 @@ func (s *Store) UpsertEmbedding(ctx context.Context, obsID int64, model string, 
 	return nil
 }
 
+// DeleteAllEmbeddings removes every row from observation_embeddings and returns
+// the number of rows deleted. This is used by the REGENERATE EMBEDDINGS action
+// in the config view to force a full re-index.
+func (s *Store) DeleteAllEmbeddings(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM observation_embeddings")
+	if err != nil {
+		return 0, fmt.Errorf("store.DeleteAllEmbeddings: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store.DeleteAllEmbeddings rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // DeleteEmbedding removes the embedding row for obsID (best-effort; no error
 // when the row does not exist).
 func (s *Store) DeleteEmbedding(ctx context.Context, obsID int64) error {
@@ -96,18 +111,31 @@ func (s *Store) DeleteEmbedding(ctx context.Context, obsID int64) error {
 
 // EmbeddingCoverage returns the number of non-deleted observations in project
 // that have an embedding row for model (have) and the total count of non-deleted
-// observations in project (total).
+// observations in project (total). When project is empty the query spans all
+// projects.
 func (s *Store) EmbeddingCoverage(ctx context.Context, project, model string) (have, total int, err error) {
-	err = s.db.QueryRowContext(ctx, `
-		SELECT
-		    COUNT(oe.observation_id),
-		    COUNT(o.id)
-		FROM observations o
-		LEFT JOIN observation_embeddings oe
-		    ON oe.observation_id = o.id AND oe.model = ?
-		WHERE o.project = ?
-		  AND o.deleted_at IS NULL
-	`, model, project).Scan(&have, &total)
+	if project == "" {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT
+			    COUNT(oe.observation_id),
+			    COUNT(o.id)
+			FROM observations o
+			LEFT JOIN observation_embeddings oe
+			    ON oe.observation_id = o.id AND oe.model = ?
+			WHERE o.deleted_at IS NULL
+		`, model).Scan(&have, &total)
+	} else {
+		err = s.db.QueryRowContext(ctx, `
+			SELECT
+			    COUNT(oe.observation_id),
+			    COUNT(o.id)
+			FROM observations o
+			LEFT JOIN observation_embeddings oe
+			    ON oe.observation_id = o.id AND oe.model = ?
+			WHERE o.project = ?
+			  AND o.deleted_at IS NULL
+		`, model, project).Scan(&have, &total)
+	}
 	if err != nil {
 		return 0, 0, fmt.Errorf("store.EmbeddingCoverage: %w", err)
 	}
@@ -115,25 +143,46 @@ func (s *Store) EmbeddingCoverage(ctx context.Context, project, model string) (h
 }
 
 // MissingEmbeddings returns up to limit non-deleted observations in project
-// that do not yet have an embedding row for model.
+// that do not yet have an embedding row for model. When project is empty the
+// query spans all projects.
 func (s *Store) MissingEmbeddings(ctx context.Context, project, model string, limit int) ([]Observation, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT o.id, o.sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
-		       o.project, o.scope, o.topic_key, o.normalized_hash,
-		       o.revision_count, o.duplicate_count, o.last_seen_at,
-		       o.created_at, o.updated_at, o.deleted_at
-		FROM observations o
-		LEFT JOIN observation_embeddings oe
-		    ON oe.observation_id = o.id AND oe.model = ?
-		WHERE o.project = ?
-		  AND o.deleted_at IS NULL
-		  AND oe.observation_id IS NULL
-		ORDER BY o.id ASC
-		LIMIT ?
-	`, model, project, limit)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if project == "" {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT o.id, o.sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
+			       o.project, o.scope, o.topic_key, o.normalized_hash,
+			       o.revision_count, o.duplicate_count, o.last_seen_at,
+			       o.created_at, o.updated_at, o.deleted_at
+			FROM observations o
+			LEFT JOIN observation_embeddings oe
+			    ON oe.observation_id = o.id AND oe.model = ?
+			WHERE o.deleted_at IS NULL
+			  AND oe.observation_id IS NULL
+			ORDER BY o.id ASC
+			LIMIT ?
+		`, model, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, `
+			SELECT o.id, o.sync_id, o.session_id, o.type, o.title, o.content, o.tool_name,
+			       o.project, o.scope, o.topic_key, o.normalized_hash,
+			       o.revision_count, o.duplicate_count, o.last_seen_at,
+			       o.created_at, o.updated_at, o.deleted_at
+			FROM observations o
+			LEFT JOIN observation_embeddings oe
+			    ON oe.observation_id = o.id AND oe.model = ?
+			WHERE o.project = ?
+			  AND o.deleted_at IS NULL
+			  AND oe.observation_id IS NULL
+			ORDER BY o.id ASC
+			LIMIT ?
+		`, model, project, limit)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("store.MissingEmbeddings: %w", err)
 	}
@@ -260,4 +309,3 @@ func (s *Store) VectorSearch(ctx context.Context, queryVec []float32, params Sea
 	}
 	return results, nil
 }
-

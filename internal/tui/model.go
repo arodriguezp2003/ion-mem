@@ -34,7 +34,8 @@ const (
 	configRowOllamaURL  = 1
 	configRowModel      = 2
 	configRowTestConn   = 3
-	configRowCount      = 4
+	configRowRegen      = 4
+	configRowCount      = 5
 )
 
 // ─── messages ─────────────────────────────────────────────────────────────────
@@ -83,6 +84,12 @@ type configSaveSettingMsg struct{}
 
 // configProbeResultMsg carries the result of a TEST CONNECTION probe.
 type configProbeResultMsg struct {
+	ok   bool
+	info string // human-readable summary or error message
+}
+
+// configRegenResultMsg carries the result of a REGENERATE EMBEDDINGS operation.
+type configRegenResultMsg struct {
 	ok   bool
 	info string // human-readable summary or error message
 }
@@ -186,10 +193,10 @@ var (
 
 	// Hybrid chip: same accent family as fuzzy — uppercase ~HYBRID.
 	hybridChipStyle = lipgloss.NewStyle().
-				Background(defaultTheme.accent).
-				Foreground(lipgloss.AdaptiveColor{Dark: "#FFEDEE", Light: "#FFFFFF"}).
-				Bold(true).
-				Padding(0, 1)
+			Background(defaultTheme.accent).
+			Foreground(lipgloss.AdaptiveColor{Dark: "#FFEDEE", Light: "#FFFFFF"}).
+			Bold(true).
+			Padding(0, 1)
 
 	// Delete confirm.
 	confirmStyle = lipgloss.NewStyle().Foreground(defaultTheme.danger).Bold(true)
@@ -345,6 +352,19 @@ type Model struct {
 	// In unit tests it is replaced with a stub that returns a fake result
 	// without needing a real server.
 	probeFn func(url, model string) tea.Cmd
+
+	// regenFn is the function used to run REGENERATE EMBEDDINGS. In production
+	// it calls DeleteAllEmbeddings then re-embeds all observations. In unit
+	// tests it is replaced with a stub that returns a fake result.
+	regenFn func(url, model string) tea.Cmd
+
+	// configRegenerating is true while a REGENERATE EMBEDDINGS operation is
+	// in flight. Used to block re-triggers and render REGENERATING… in the row.
+	configRegenerating bool
+	// configRegenResult is the last REGENERATE EMBEDDINGS result (empty = none yet).
+	configRegenResult string
+	// configRegenOK is true if the last regeneration succeeded.
+	configRegenOK bool
 
 	// UI components.
 	status string
@@ -562,6 +582,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.configTesting = false
 			m.configTestOK = msg.ok
 			m.configTestResult = msg.info
+		}
+		return m, nil
+
+	case configRegenResultMsg:
+		// Ignore stale results that arrive after the user left the config view.
+		if m.view == viewConfig {
+			m.configRegenerating = false
+			m.configRegenOK = msg.ok
+			m.configRegenResult = msg.info
 		}
 		return m, nil
 
