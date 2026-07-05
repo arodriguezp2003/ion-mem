@@ -259,3 +259,38 @@ func TestListRevisions_HardDeleteCascades(t *testing.T) {
 		t.Errorf("expected 0 revisions after hard delete cascade, got %d", count)
 	}
 }
+
+// TestTopicUpsert_NoOpKeepsRevisionCountAndHistory verifies that re-saving
+// identical content to a topic neither increments revision_count nor creates
+// a revision row — the counter must always match the captured history.
+func TestTopicUpsert_NoOpKeepsRevisionCountAndHistory(t *testing.T) {
+	s := mustOpen(t)
+	ctx := context.Background()
+	sess := mustSession(t, s, "p")
+
+	params := store.AddObservationParams{
+		SessionID: sess.ID, Type: "decision", Title: "stable title",
+		Content: "stable content", Project: "p", Scope: "project",
+		TopicKey: "topic/noop",
+	}
+	first, err := s.AddObservation(ctx, params)
+	if err != nil {
+		t.Fatalf("AddObservation first: %v", err)
+	}
+
+	second, err := s.AddObservation(ctx, params) // identical — no-op upsert
+	if err != nil {
+		t.Fatalf("AddObservation second: %v", err)
+	}
+	if second.RevisionCount != first.RevisionCount {
+		t.Errorf("no-op upsert changed revision_count: %d -> %d", first.RevisionCount, second.RevisionCount)
+	}
+
+	revs, err := s.ListRevisions(ctx, first.ID)
+	if err != nil {
+		t.Fatalf("ListRevisions: %v", err)
+	}
+	if len(revs) != 0 {
+		t.Errorf("no-op upsert captured %d revisions, want 0", len(revs))
+	}
+}

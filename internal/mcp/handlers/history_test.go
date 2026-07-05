@@ -189,7 +189,7 @@ func TestIonHistory_ContentPreviewCapped(t *testing.T) {
 	if !ok {
 		t.Fatalf("content_preview must be string, got %T", rev["content_preview"])
 	}
-	if len(preview) > 300 {
+	if len([]rune(preview)) > 300 {
 		t.Errorf("content_preview length = %d, want <= 300", len(preview))
 	}
 }

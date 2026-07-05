@@ -181,8 +181,11 @@ func (s *Store) topicKeyUpsert(ctx context.Context, params AddObservationParams,
 		return Observation{}, fmt.Errorf("store.AddObservation topicKey read current: %w", err)
 	}
 
-	// Capture BEFORE image only when something actually changes.
-	if current.NormalizedHash != hash || current.Title != params.Title || current.Type != params.Type {
+	// A revision only exists when content, title, or type actually changed.
+	// Both the BEFORE-image capture and the revision_count increment share
+	// this condition so revision_count always matches the captured history.
+	changed := current.NormalizedHash != hash || current.Title != params.Title || current.Type != params.Type
+	if changed {
 		if err := captureRevision(ctx, tx, current, now); err != nil {
 			return Observation{}, err
 		}
@@ -193,10 +196,14 @@ func (s *Store) topicKeyUpsert(ctx context.Context, params AddObservationParams,
 		toolNameArg = params.ToolName
 	}
 
+	revisionIncrement := ""
+	if changed {
+		revisionIncrement = ", revision_count=revision_count+1"
+	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE observations
 		SET type=?, title=?, content=?, tool_name=?, normalized_hash=?,
-		    revision_count=revision_count+1, last_seen_at=?, updated_at=?
+		    last_seen_at=?, updated_at=?`+revisionIncrement+`
 		WHERE id=?`,
 		params.Type, params.Title, params.Content, toolNameArg, hash, now, now, id,
 	)
