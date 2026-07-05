@@ -24,6 +24,7 @@ const (
 	viewProjects viewState = iota
 	viewObservations
 	viewDetail
+	viewGlobalSearch // cross-project search results — observations list with project column
 )
 
 // ─── messages ─────────────────────────────────────────────────────────────────
@@ -108,6 +109,22 @@ var defaultTheme = theme{
 	surface: lipgloss.AdaptiveColor{Dark: "#1C1C1C", Light: "#F5F5F5"},
 }
 
+// badgeTints maps observation types to a subtle tinted background color.
+// All tints share the same purple-blue hue family — only brightness varies.
+// Text uses a near-white foreground so it reads on all tint levels.
+var badgeTints = map[string]string{
+	"decision":     "#3D2A7A", // deepest — most important type
+	"architecture": "#3A2E8A",
+	"bugfix":       "#2E3580",
+	"discovery":    "#2A3D7A",
+	"config":       "#253A72",
+	"preference":   "#22376B",
+	"manual":       "#1F3464",
+	// default (unknown types): falls through to badgeDefaultTint
+}
+
+const badgeDefaultTint = "#1C2E58"
+
 // styles derived from defaultTheme. Built once at package init.
 var (
 	// Text styles.
@@ -125,20 +142,48 @@ var (
 				Bold(true).
 				Foreground(defaultTheme.accent)
 
-	// Type badge: subtle background, fixed width feel via padding.
-	badgeStyle = lipgloss.NewStyle().
-			Foreground(defaultTheme.accent).
-			Bold(true)
-
 	// Status bar.
 	statusBarStyle = lipgloss.NewStyle().Foreground(defaultTheme.dim)
 
-	// Fuzzy indicator.
-	fuzzyStyle = lipgloss.NewStyle().Foreground(defaultTheme.danger).Italic(true)
+	// Fuzzy chip: accent background, dark text.
+	fuzzyChipStyle = lipgloss.NewStyle().
+			Background(defaultTheme.accent).
+			Foreground(lipgloss.AdaptiveColor{Dark: "#F0ECFF", Light: "#FFFFFF"}).
+			Bold(true).
+			Padding(0, 1)
+
+	// Search bar border styles.
+	searchBarActiveStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(defaultTheme.accent).
+				Padding(0, 1)
+
+	searchBarIdleStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(defaultTheme.muted).
+				Padding(0, 1)
 
 	// Delete confirm.
 	confirmStyle = lipgloss.NewStyle().Foreground(defaultTheme.danger).Bold(true)
 )
+
+// renderBadge renders a fixed-width type badge with a per-type tinted background
+// and near-white text. The badge is padded/truncated to badgeInnerWidth characters.
+const badgeInnerWidth = 12 // visible characters inside the badge (excludes border spacing)
+
+func renderBadge(typeName string) string {
+	bg, ok := badgeTints[typeName]
+	if !ok {
+		bg = badgeDefaultTint
+	}
+	label := truncStr(typeName, badgeInnerWidth)
+	label = fmt.Sprintf("%-*s", badgeInnerWidth, label)
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Foreground(lipgloss.AdaptiveColor{Dark: "#DDD6FE", Light: "#F5F3FF"}).
+		Bold(true).
+		Render(label)
+}
 
 // ─── layout constants ─────────────────────────────────────────────────────────
 
@@ -150,8 +195,9 @@ const (
 	// 1 status line + 1 footer line — no leading blank; padding is injected
 	// into the content area to pin chrome to the terminal bottom.
 	statusRows = 2
-	// searchRowExtra is the extra lines the inline search input takes.
-	searchRowExtra = 2
+	// searchBarRows is the number of content-area lines consumed by the
+	// persistent search bar (border top + content + border bottom).
+	searchBarRows = 3
 	// minVisibleRows is the minimum number of list rows to show.
 	minVisibleRows = 1
 	// scrollMargin is the look-ahead margin kept when scrolling.
@@ -191,11 +237,15 @@ type Model struct {
 	obsCursor       int
 	obsOffset       int // first visible index in the windowed observations list
 
-	// Search.
+	// Search (per-project observations view).
 	searching    bool
 	searchQuery  string
 	fuzzyResults bool
 	searchInput  textinput.Model
+
+	// Global search (cross-project from projects view).
+	globalSearching bool   // true while search input is focused in projects view
+	globalQuery     string // last submitted global query
 
 	// Detail view.
 	selectedObs *store.Observation
@@ -237,23 +287,34 @@ func newModelWithOptions(opts Options) Model {
 // ─── windowing helpers ────────────────────────────────────────────────────────
 
 // listVisibleHeight returns the number of list rows that fit in the current
-// terminal height for list views (projects / observations).
+// terminal height for the given view configuration.
 //
 // Two rows are always reserved for overflow markers (↑ more / ↓ more) so the
 // worst-case layout (both markers visible) never pushes the output over the
-// terminal height. The search row is subtracted when the inline search input
-// is active.
-func (m Model) listVisibleHeight(searchActive bool) int {
-	extra := 0
-	if searchActive {
-		extra = searchRowExtra
-	}
+// terminal height.
+//
+// Parameters:
+//   - withSearchBar: subtract searchBarRows for the persistent search bar (observations view)
+//   - withLogo: subtract logoHeight for the hero logo (projects view on tall terminals)
+func (m Model) listVisibleHeight(withSearchBar, withLogo bool) int {
 	const markerRows = 2 // reserve for ↑ more + ↓ more
+	extra := 0
+	if withSearchBar {
+		extra += searchBarRows
+	}
+	if withLogo {
+		extra += logoHeight
+	}
 	h := m.height - headerRows - statusRows - markerRows - extra
 	if h < minVisibleRows {
 		return minVisibleRows
 	}
 	return h
+}
+
+// showLogo returns true when the terminal is tall enough to display the hero logo.
+func (m Model) showLogo() bool {
+	return m.height >= logoMinTermHeight
 }
 
 // clampWindow adjusts offset so the invariant holds:
@@ -319,8 +380,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp.Width = msg.Width
 		m.vp.Height = vpHeight
 		// Reclaim window after resize so cursor stays visible.
-		m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false), len(m.projects))
-		m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(m.searching), len(m.observations))
+		m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
+		m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
 		return m, nil
 
 	case projectsLoadedMsg:
@@ -349,6 +410,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.searching = false
 		m.obsCursor = 0
 		m.obsOffset = 0
+		// Global search lands in viewGlobalSearch — preserve that state.
+		// Per-project search stays in viewObservations (unchanged).
 		return m, nil
 
 	case searchSubmitMsg:
@@ -366,8 +429,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
-	// Delegate to sub-components when searching.
-	if m.searching {
+	// Delegate to sub-components when searching (per-project or global).
+	if m.searching || m.globalSearching {
 		var cmd tea.Cmd
 		m.searchInput, cmd = m.searchInput.Update(msg)
 		return m, cmd
@@ -384,8 +447,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// When in search input mode, handle Enter/Esc specially.
-	if m.searching {
+	// When in search input mode (observations view), handle Enter/Esc specially.
+	if m.searching && m.view == viewObservations {
 		switch {
 		case key.Matches(msg, keys.Back):
 			m.searching = false
@@ -400,6 +463,33 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.fetchObservations(m.selectedProject)
 			}
 			return m, m.runSearch(q)
+		default:
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Global search input mode (projects view '/' → cross-project search).
+	if m.globalSearching {
+		switch {
+		case key.Matches(msg, keys.Back):
+			m.globalSearching = false
+			m.globalQuery = ""
+			m.searchInput.Reset()
+			return m, nil
+		case msg.Type == tea.KeyEnter:
+			q := strings.TrimSpace(m.searchInput.Value())
+			m.globalQuery = q
+			m.globalSearching = false
+			if q == "" {
+				return m, nil
+			}
+			m.view = viewGlobalSearch
+			m.obsCursor = 0
+			m.obsOffset = 0
+			m.fuzzyResults = false
+			return m, m.runGlobalSearch(q)
 		default:
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
@@ -430,6 +520,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyObservations(msg)
 	case viewDetail:
 		return m.handleKeyDetail(msg)
+	case viewGlobalSearch:
+		return m.handleKeyGlobalSearch(msg)
 	}
 	return m, nil
 }
@@ -441,12 +533,12 @@ func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Up):
 		if m.projectCursor > 0 {
 			m.projectCursor--
-			m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false), len(m.projects))
+			m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
 		}
 	case key.Matches(msg, keys.Down):
 		if m.projectCursor < len(m.projects)-1 {
 			m.projectCursor++
-			m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false), len(m.projects))
+			m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
 		}
 	case key.Matches(msg, keys.Enter):
 		if len(m.projects) == 0 {
@@ -458,6 +550,13 @@ func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.fuzzyResults = false
 		m.view = viewObservations
 		return m, m.fetchObservations(m.selectedProject)
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == '/':
+		// Open global search (cross-project).
+		m.globalSearching = true
+		m.searchInput.Reset()
+		m.searchInput.Placeholder = "Search all projects…"
+		m.searchInput.Focus()
+		return m, textinput.Blink
 	}
 	return m, nil
 }
@@ -472,12 +571,12 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Up):
 		if m.obsCursor > 0 {
 			m.obsCursor--
-			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(m.searching), len(m.observations))
+			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
 		}
 	case key.Matches(msg, keys.Down):
 		if m.obsCursor < len(m.observations)-1 {
 			m.obsCursor++
-			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(m.searching), len(m.observations))
+			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
 		}
 	case key.Matches(msg, keys.Enter):
 		if len(m.observations) == 0 {
@@ -491,12 +590,46 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == '/':
 		m.searching = true
 		m.searchInput.Reset()
+		m.searchInput.Placeholder = "Search memories… (press /)"
 		m.searchInput.Focus()
 		return m, textinput.Blink
 	case key.Matches(msg, keys.Delete):
 		if len(m.observations) > 0 {
 			m.confirmDelete = true
 		}
+	}
+	return m, nil
+}
+
+func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Back):
+		m.view = viewProjects
+		m.globalQuery = ""
+		m.fuzzyResults = false
+		m.observations = nil
+		m.obsCursor = 0
+		m.obsOffset = 0
+	case key.Matches(msg, keys.Up):
+		if m.obsCursor > 0 {
+			m.obsCursor--
+			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(false, false), len(m.observations))
+		}
+	case key.Matches(msg, keys.Down):
+		if m.obsCursor < len(m.observations)-1 {
+			m.obsCursor++
+			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(false, false), len(m.observations))
+		}
+	case key.Matches(msg, keys.Enter):
+		if len(m.observations) == 0 {
+			return m, nil
+		}
+		obs := m.observations[m.obsCursor]
+		m.selectedObs = &obs
+		m.selectedProject = obs.Project
+		m.vp.SetContent(renderObservationDetail(obs))
+		m.vp.GotoTop()
+		m.view = viewDetail
 	}
 	return m, nil
 }
@@ -529,6 +662,8 @@ func (m Model) View() string {
 		return m.viewObservations()
 	case viewDetail:
 		return m.viewDetail()
+	case viewGlobalSearch:
+		return m.viewGlobalSearchResults()
 	}
 	return ""
 }
@@ -550,6 +685,84 @@ func (m Model) renderHeader(breadcrumb string) string {
 		return brand + strings.Repeat(" ", gap) + right + strings.Repeat(" ", rightPad)
 	}
 	return brand + "  " + right
+}
+
+// renderLogoHero renders the ION MEM ASCII logo with a vertical gradient and
+// a dim tagline. Returns a string with exactly logoHeight lines (each
+// terminated by "\n"). Callers must subtract logoHeight from the content budget.
+func (m Model) renderLogoHero(version string) string {
+	var sb strings.Builder
+
+	// Determine centering offset.
+	w := m.width
+	if w < 1 {
+		w = 80
+	}
+
+	// Render each art row with its gradient color.
+	for i, row := range logoRows {
+		colorIdx := i
+		if colorIdx >= len(logoGradient) {
+			colorIdx = len(logoGradient) - 1
+		}
+		col := lipgloss.Color(logoGradient[colorIdx])
+		styled := lipgloss.NewStyle().Foreground(col).Render(row)
+		// Center: compute raw width of the art row.
+		rawWidth := lipgloss.Width(styled)
+		pad := (w - rawWidth) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		sb.WriteString(strings.Repeat(" ", pad) + styled + "\n")
+	}
+
+	// Tagline line (1 line).
+	tagline := dimStyle.Render("Persistent memory for AI coding agents — " + version)
+	tagRaw := lipgloss.Width(tagline)
+	tagPad := (w - tagRaw) / 2
+	if tagPad < 0 {
+		tagPad = 0
+	}
+	sb.WriteString(strings.Repeat(" ", tagPad) + tagline + "\n")
+
+	return sb.String()
+}
+
+// renderSearchBar renders the persistent styled search bar for the observations view.
+// It returns a string with exactly searchBarRows lines (each terminated by "\n").
+// When focused (searching=true), the border is accent-colored and shows live input.
+// When idle, the border is muted and shows a dim placeholder prompt.
+func (m Model) renderSearchBar() string {
+	w := m.width
+	if w < 20 {
+		w = 20
+	}
+	// Inner width: full width minus border (2 cols) minus padding (2 each side = 4).
+	innerW := w - 6
+	if innerW < 5 {
+		innerW = 5
+	}
+
+	var inner string
+	if m.searching {
+		// Live input — show "/" glyph + textinput.
+		prompt := headerStyle.Render("/") + " " + m.searchInput.View()
+		inner = prompt
+	} else if m.searchQuery != "" {
+		// Show submitted query in dim style.
+		inner = dimStyle.Render("/") + " " + dimStyle.Render(m.searchQuery)
+	} else {
+		// Idle placeholder.
+		inner = dimStyle.Render("/ Search memories… (press /)")
+	}
+
+	style := searchBarIdleStyle
+	if m.searching {
+		style = searchBarActiveStyle
+	}
+	// Force the box to span full width.
+	rendered := style.Width(innerW).Render(inner)
+	return rendered + "\n"
 }
 
 // renderSeparator renders a full-width horizontal rule in muted style.
@@ -629,6 +842,29 @@ func (m Model) viewProjects() string {
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
+	// Hero logo: shown on tall terminals only.
+	logo := m.showLogo()
+	if logo {
+		content.WriteString(m.renderLogoHero(m.version))
+	}
+
+	// Global search overlay: when '/' is pressed in projects view, render an
+	// accent search bar at the top of the content area (above the project list).
+	if m.globalSearching {
+		// Render input in the same styled box as the observations search bar.
+		w := m.width
+		if w < 20 {
+			w = 20
+		}
+		innerW := w - 6
+		if innerW < 5 {
+			innerW = 5
+		}
+		prompt := headerStyle.Render("/") + " " + m.searchInput.View()
+		box := searchBarActiveStyle.Width(innerW).Render(prompt)
+		content.WriteString(box + "\n")
+	}
+
 	if len(m.projects) == 0 {
 		msg := dimStyle.Render("No projects yet — memories will appear as agents save them.")
 		if m.width > 0 {
@@ -638,7 +874,7 @@ func (m Model) viewProjects() string {
 		}
 		content.WriteString(msg + "\n")
 	} else {
-		visible := m.listVisibleHeight(false)
+		visible := m.listVisibleHeight(false, logo)
 		offset := m.projOffset
 		total := len(m.projects)
 
@@ -711,15 +947,22 @@ func (m Model) viewProjects() string {
 
 	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.projectCursor, len(m.projects))
-	statusText := fmt.Sprintf("%d project(s)", len(m.projects))
+	statusLeft := fmt.Sprintf("%d project(s)", len(m.projects))
 	if pos != "" {
-		statusText += "  " + pos
+		statusLeft += "  " + pos
 	}
 	if m.err != nil {
-		statusText = "error: " + m.err.Error()
+		statusLeft = "error: " + m.err.Error()
 	}
-	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusText)
-	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+
+	var footerHints []key.Binding
+	if m.globalSearching {
+		footerHints = []key.Binding{keys.Back, keys.Enter}
+	} else {
+		footerHints = keys.ShortHelp()
+	}
+	footerLine := strings.Repeat(" ", leftPad) + mutedStyle.Render(m.help.ShortHelpView(footerHints))
 
 	// ── compose full-height layout ───────────────────────────────────────────
 	// Content area height = terminal height − header − separator − status − footer.
@@ -745,9 +988,8 @@ func (m Model) viewObservations() string {
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
-	if m.searching {
-		content.WriteString(strings.Repeat(" ", leftPad) + "Search: " + m.searchInput.View() + "\n\n")
-	}
+	// Persistent search bar — always visible between header and list.
+	content.WriteString(m.renderSearchBar())
 
 	if len(m.observations) == 0 {
 		var emptyMsg string
@@ -758,7 +1000,7 @@ func (m Model) viewObservations() string {
 		}
 		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(emptyMsg) + "\n")
 	} else {
-		visible := m.listVisibleHeight(m.searching)
+		visible := m.listVisibleHeight(true, false)
 		offset := m.obsOffset
 		total := len(m.observations)
 
@@ -767,15 +1009,15 @@ func (m Model) viewObservations() string {
 			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
 		}
 
-		// Badge: "[type      ]" = 12 chars raw.
-		// Age column: right-aligned, ~10 chars, rightPad from edge.
-		// Title: everything in between.
-		badgeWidth := 12
+		// Badge: badgeInnerWidth chars of rendered content.
+		// The lipgloss badge adds background/foreground escape codes, so we use
+		// lipgloss.Width() for layout math rather than raw string length.
+		badgeRenderedWidth := badgeInnerWidth // visual columns consumed by badge (no border)
 		ageWidth := 10
 		titleWidth := 50
 		if m.width > 40 {
-			// leftPad + badge + space + title + gap + age + rightPad = width
-			titleWidth = m.width - leftPad - badgeWidth - 1 - ageWidth - rightPad
+			// leftPad + badgeRenderedWidth + 1 (space) + titleWidth + gap + ageWidth + rightPad = width
+			titleWidth = m.width - leftPad - badgeRenderedWidth - 1 - ageWidth - rightPad
 			if titleWidth < 10 {
 				titleWidth = 10
 			}
@@ -787,7 +1029,7 @@ func (m Model) viewObservations() string {
 		}
 		for i := offset; i < end; i++ {
 			obs := m.observations[i]
-			badge := badgeStyle.Render(fmt.Sprintf("[%-10s]", truncStr(obs.Type, 10)))
+			badge := renderBadge(obs.Type)
 			ageStr := humanizeTime(parseCreatedAt(obs.CreatedAt))
 			title := truncStr(obs.Title, titleWidth)
 
@@ -796,8 +1038,8 @@ func (m Model) viewObservations() string {
 			if m.width > 0 {
 				titleFmt := fmt.Sprintf("%-*s", titleWidth, title)
 				// Compute gap between title and age to right-align age.
-				// raw chars used so far: leftPad + badgeWidth + 1 (space) + titleWidth
-				usedLeft := leftPad + badgeWidth + 1 + titleWidth
+				// raw chars used so far: leftPad + badgeRenderedWidth + 1 (space) + titleWidth
+				usedLeft := leftPad + badgeRenderedWidth + 1 + titleWidth
 				gap := m.width - usedLeft - len(ageStr) - rightPad
 				if gap < 1 {
 					gap = 1
@@ -805,7 +1047,7 @@ func (m Model) viewObservations() string {
 				ageRendered := dimStyle.Render(ageStr)
 				if i == m.obsCursor {
 					indicator := selectedRowStyle.Render("▌") + " "
-					titleStr := selectedRowStyle.Render(titleFmt)
+					titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(titleFmt)
 					// Indicator occupies leftPad chars (▌ + space).
 					row = indicator + badge + " " + titleStr + strings.Repeat(" ", gap) + ageRendered
 				} else {
@@ -815,7 +1057,7 @@ func (m Model) viewObservations() string {
 				age := dimStyle.Render(ageStr)
 				if i == m.obsCursor {
 					indicator := selectedRowStyle.Render("▌ ")
-					titleStr := selectedRowStyle.Render(fmt.Sprintf("%-*s", titleWidth, title))
+					titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(fmt.Sprintf("%-*s", titleWidth, title))
 					row = indicator + badge + " " + titleStr + " " + age
 				} else {
 					row = strings.Repeat(" ", leftPad) + badge + " " + fmt.Sprintf("%-*s", titleWidth, title) + " " + age
@@ -835,21 +1077,158 @@ func (m Model) viewObservations() string {
 
 	// ── status and footer ────────────────────────────────────────────────────
 	pos := positionIndicator(m.obsCursor, len(m.observations))
-	statusText := m.selectedProject + " — " + fmt.Sprintf("%d observation(s)", len(m.observations))
+	statusLeft := m.selectedProject + " — " + fmt.Sprintf("%d observation(s)", len(m.observations))
 	if pos != "" {
-		statusText += "  " + pos
-	}
-	if m.searchQuery != "" {
-		statusText += fmt.Sprintf("  [%q", m.searchQuery)
-		if m.fuzzyResults {
-			statusText += "  " + fuzzyStyle.Render("~fuzzy")
-		}
-		statusText += "]"
+		statusLeft += "  " + pos
 	}
 	if m.err != nil {
-		statusText = "error: " + m.err.Error()
+		statusLeft = "error: " + m.err.Error()
 	}
-	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusText)
+
+	// Build status line: left context + optional fuzzy chip right-aligned.
+	var statusLine string
+	if m.searchQuery != "" && m.fuzzyResults {
+		chip := fuzzyChipStyle.Render("~fuzzy")
+		leftPart := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
+		if m.width > 0 {
+			leftW := lipgloss.Width(leftPart)
+			chipW := lipgloss.Width(chip)
+			gap := m.width - leftW - chipW - rightPad
+			if gap < 1 {
+				gap = 1
+			}
+			statusLine = leftPart + strings.Repeat(" ", gap) + chip
+		} else {
+			statusLine = leftPart + "  " + chip
+		}
+	} else if m.searchQuery != "" {
+		statusLine = strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
+	} else {
+		statusLine = strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+	}
+
+	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+
+	// ── compose full-height layout ───────────────────────────────────────────
+	contentRows := m.height - headerRows - statusRows
+	if contentRows < 1 {
+		contentRows = 1
+	}
+	paddedContent := padContentArea(content.String(), contentRows)
+
+	return header + "\n" +
+		separator + "\n" +
+		paddedContent + "\n" +
+		statusLine + "\n" +
+		footerLine + "\n"
+}
+
+// viewGlobalSearchResults renders search results across all projects.
+// It reuses the observations list layout but adds a dim "project" column.
+func (m Model) viewGlobalSearchResults() string {
+	query := m.globalQuery
+	// ── chrome ──────────────────────────────────────────────────────────────
+	breadcrumb := fmt.Sprintf(`Projects › search %q`, query)
+	header := m.renderHeader(breadcrumb)
+	separator := m.renderSeparator()
+
+	// ── content rows ────────────────────────────────────────────────────────
+	var content strings.Builder
+
+	if len(m.observations) == 0 {
+		var emptyMsg string
+		if query != "" {
+			emptyMsg = fmt.Sprintf("No results for %q.", query)
+		} else {
+			emptyMsg = "No results."
+		}
+		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(emptyMsg) + "\n")
+	} else {
+		visible := m.listVisibleHeight(false, false)
+		offset := m.obsOffset
+		total := len(m.observations)
+
+		showUp, showDown := overflowMarkers(offset, visible, total)
+		if showUp {
+			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
+		}
+
+		// Column layout: badge | title | project (dim) | age
+		badgeW := badgeInnerWidth
+		projColW := 14
+		ageWidth := 10
+		titleWidth := 30
+		if m.width > 60 {
+			titleWidth = m.width - leftPad - badgeW - 1 - projColW - 2 - ageWidth - rightPad
+			if titleWidth < 10 {
+				titleWidth = 10
+			}
+		}
+
+		end := offset + visible
+		if end > total {
+			end = total
+		}
+		for i := offset; i < end; i++ {
+			obs := m.observations[i]
+			badge := renderBadge(obs.Type)
+			ageStr := humanizeTime(parseCreatedAt(obs.CreatedAt))
+			title := truncStr(obs.Title, titleWidth)
+			proj := dimStyle.Render(truncStr(obs.Project, projColW))
+
+			titleFmt := fmt.Sprintf("%-*s", titleWidth, title)
+
+			usedLeft := leftPad + badgeW + 1 + titleWidth + 2 + projColW
+			gap := m.width - usedLeft - len(ageStr) - rightPad
+			if gap < 1 {
+				gap = 1
+			}
+			ageRendered := dimStyle.Render(ageStr)
+			var row string
+			if i == m.obsCursor {
+				indicator := selectedRowStyle.Render("▌") + " "
+				titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(titleFmt)
+				row = indicator + badge + " " + titleStr + "  " + proj + strings.Repeat(" ", gap) + ageRendered
+			} else {
+				row = strings.Repeat(" ", leftPad) + badge + " " + titleFmt + "  " + proj + strings.Repeat(" ", gap) + ageRendered
+			}
+			content.WriteString(row + "\n")
+		}
+
+		if showDown {
+			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↓ more") + "\n")
+		}
+	}
+
+	// ── status and footer ────────────────────────────────────────────────────
+	pos := positionIndicator(m.obsCursor, len(m.observations))
+	statusLeft := fmt.Sprintf("all projects — %d result(s)", len(m.observations))
+	if pos != "" {
+		statusLeft += "  " + pos
+	}
+	if m.err != nil {
+		statusLeft = "error: " + m.err.Error()
+	}
+
+	var statusLine string
+	if m.fuzzyResults {
+		chip := fuzzyChipStyle.Render("~fuzzy")
+		leftPart := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+		if m.width > 0 {
+			leftW := lipgloss.Width(leftPart)
+			chipW := lipgloss.Width(chip)
+			gap := m.width - leftW - chipW - rightPad
+			if gap < 1 {
+				gap = 1
+			}
+			statusLine = leftPart + strings.Repeat(" ", gap) + chip
+		} else {
+			statusLine = leftPart + "  " + chip
+		}
+	} else {
+		statusLine = strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+	}
+
 	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
 
 	// ── compose full-height layout ───────────────────────────────────────────
@@ -880,20 +1259,36 @@ func (m Model) viewDetail() string {
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
-	// Metadata block — count these lines so viewport height stays consistent.
+	// Metadata block — label:value grid with dim labels.
+	// Count lines precisely; viewport height is set in Update's WindowSizeMsg.
+	labelStyle := lipgloss.NewStyle().Foreground(defaultTheme.dim).Width(10)
+	metaLines := 0
+
+	// Title row (full accent bold).
 	content.WriteString(strings.Repeat(" ", leftPad) + selectedRowStyle.Render(obs.Title) + "\n")
-	content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(fmt.Sprintf("type: %s  project: %s  scope: %s", obs.Type, obs.Project, obs.Scope)) + "\n")
-	metaLines := 2
+	metaLines++
+
+	// Type + badge inline.
+	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("type") + renderBadge(obs.Type) + "\n")
+	metaLines++
+
+	// project / scope on same line.
+	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("project") + dimStyle.Render(obs.Project) + "   " + labelStyle.Render("scope") + dimStyle.Render(obs.Scope) + "\n")
+	metaLines++
+
 	if obs.TopicKey != nil && *obs.TopicKey != "" {
-		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render("topic_key: "+*obs.TopicKey) + "\n")
+		content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("topic_key") + dimStyle.Render(*obs.TopicKey) + "\n")
 		metaLines++
 	}
 	if obs.SyncID != "" {
-		content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("sync_id: "+obs.SyncID) + "\n")
+		content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("sync_id") + mutedStyle.Render(obs.SyncID) + "\n")
 		metaLines++
 	}
-	content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(fmt.Sprintf("created: %s  updated: %s", obs.CreatedAt, obs.UpdatedAt)) + "\n")
+	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("created") + dimStyle.Render(obs.CreatedAt) + "\n")
 	metaLines++
+	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("updated") + dimStyle.Render(obs.UpdatedAt) + "\n")
+	metaLines++
+
 	// Horizontal rule inside the content area.
 	ruleWidth := m.width
 	if ruleWidth < 1 {
@@ -978,6 +1373,30 @@ func (m Model) runSearch(query string) tea.Cmd {
 			Q:       query,
 			Project: project,
 			Limit:   50,
+		})
+		if err != nil {
+			return errMsg{err}
+		}
+		obs := make([]store.Observation, 0, len(results))
+		for _, r := range results {
+			obs = append(obs, r.Observation)
+		}
+		return searchResultMsg{results: obs, fuzzy: fuzzy}
+	}
+}
+
+// runGlobalSearch performs a cross-project search (Project field is empty,
+// which means all projects per store.SearchParams semantics).
+func (m Model) runGlobalSearch(query string) tea.Cmd {
+	if m.store == nil {
+		return nil
+	}
+	st := m.store
+	return func() tea.Msg {
+		results, fuzzy, err := st.SearchWithFallback(context.Background(), store.SearchParams{
+			Q:     query,
+			Limit: 50,
+			// Project intentionally empty → all projects.
 		})
 		if err != nil {
 			return errMsg{err}

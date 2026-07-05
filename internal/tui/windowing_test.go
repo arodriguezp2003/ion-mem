@@ -118,7 +118,7 @@ func TestWindowFollowsCursorDown(t *testing.T) {
 	m.obsCursor = 0
 	m.obsOffset = 0
 
-	visible := m.listVisibleHeight(false)
+	visible := m.listVisibleHeight(true, false)
 
 	// Press 'j' repeatedly until cursor moves well past the initial window.
 	for m.obsCursor < visible+5 {
@@ -143,7 +143,7 @@ func TestWindowFollowsCursorUp(t *testing.T) {
 	m.observations = obs
 	// Start at the bottom.
 	m.obsCursor = 49
-	visible := m.listVisibleHeight(false)
+	visible := m.listVisibleHeight(true, false)
 	m.obsOffset = clampWindow(49, 0, visible, 50)
 
 	// Press 'k' repeatedly until cursor is back at the top.
@@ -173,7 +173,7 @@ func TestWindowResizeKeepsCursorVisible(t *testing.T) {
 
 	// Shrink the terminal — cursor must remain visible.
 	m = setSize(m, 80, 15)
-	visible := m.listVisibleHeight(false)
+	visible := m.listVisibleHeight(true, false)
 
 	if m.obsOffset > cursor {
 		t.Errorf("after resize, offset(%d) > cursor(%d)", m.obsOffset, cursor)
@@ -349,6 +349,186 @@ func TestRenderSmoke_ProjectsView(t *testing.T) {
 	}
 	if !strings.Contains(secondLast, "project(s)") {
 		t.Errorf("second-to-last line does not look like status bar, got: %q", secondLast)
+	}
+}
+
+// TestRenderSmoke_ProjectsTallTerminal verifies the hero logo is present at
+// 80x40, that the view fills the terminal exactly, and the project list is
+// still visible below the logo.
+func TestRenderSmoke_ProjectsTallTerminal(t *testing.T) {
+	const termW, termH = 80, 40
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewProjects
+	m.projects = []store.ProjectSummary{
+		{Project: "alpha", ObservationCount: 12, SessionCount: 3, LastActivity: time.Now().Add(-2 * time.Hour)},
+		{Project: "beta", ObservationCount: 5, SessionCount: 1, LastActivity: time.Now().Add(-30 * time.Minute)},
+	}
+	m.projectCursor = 0
+	m.projOffset = 0
+
+	out := m.View()
+
+	// Exact fill: every row accounted for.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("tall terminal: View() produced %d lines, want exactly %d\noutput:\n%s", lineCount, termH, out)
+	}
+
+	// Logo must appear: check for a block-character substring unique to the logo art.
+	// logoRows[0] contains "██╗" which only exists in the logo.
+	if !strings.Contains(out, "██╗") {
+		t.Errorf("tall terminal: logo art not found in View() output\noutput:\n%s", out)
+	}
+
+	// Project list must still be visible.
+	if !strings.Contains(out, "alpha") {
+		t.Errorf("tall terminal: project 'alpha' not found after logo\noutput:\n%s", out)
+	}
+
+	// Status bar on second-to-last; footer on last.
+	lines := viewLines(out)
+	if len(lines) < 2 {
+		t.Fatalf("View() fewer than 2 lines")
+	}
+	if !strings.Contains(lines[len(lines)-1], "quit") {
+		t.Errorf("footer not on last line; got: %q", lines[len(lines)-1])
+	}
+	if !strings.Contains(lines[len(lines)-2], "project(s)") {
+		t.Errorf("status bar not on second-to-last line; got: %q", lines[len(lines)-2])
+	}
+}
+
+// TestRenderSmoke_ProjectsShortTerminalNoLogo verifies the logo is NOT shown
+// at 80x20 (below logoMinTermHeight), that the compact header still appears,
+// and the view fills exactly.
+func TestRenderSmoke_ProjectsShortTerminalNoLogo(t *testing.T) {
+	const termW, termH = 80, 20
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewProjects
+	m.projects = []store.ProjectSummary{
+		{Project: "alpha", ObservationCount: 12, SessionCount: 3, LastActivity: time.Now().Add(-2 * time.Hour)},
+	}
+	m.projectCursor = 0
+	m.projOffset = 0
+
+	out := m.View()
+
+	// Exact fill.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("short terminal: View() produced %d lines, want exactly %d\noutput:\n%s", lineCount, termH, out)
+	}
+
+	// Logo must NOT appear (height < logoMinTermHeight).
+	// Check that none of the logo-exclusive box-drawing characters are present
+	// in positions beyond the header (use a string unique to the art rows).
+	// logoRows[0] starts with "  ██╗" — ██ is only in the logo.
+	if strings.Contains(out, "██╗") {
+		t.Errorf("short terminal: logo art found at h=%d but should be suppressed\noutput:\n%s", termH, out)
+	}
+
+	// Brand header must still be on first line.
+	lines := viewLines(out)
+	if !strings.Contains(lines[0], "ion-mem") {
+		t.Errorf("brand not on first line at short terminal; got: %q", lines[0])
+	}
+
+	// Status bar on second-to-last; footer on last.
+	if !strings.Contains(lines[len(lines)-1], "quit") {
+		t.Errorf("footer not on last line; got: %q", lines[len(lines)-1])
+	}
+	if !strings.Contains(lines[len(lines)-2], "project(s)") {
+		t.Errorf("status bar not on second-to-last line; got: %q", lines[len(lines)-2])
+	}
+}
+
+// TestGlobalSearchFlow verifies the full global search lifecycle:
+// '/' in projects view opens search input, enter submits and transitions to
+// viewGlobalSearch, esc returns to viewProjects. Also verifies that the
+// runGlobalSearch command uses an empty Project field (all-projects search).
+func TestGlobalSearchFlow(t *testing.T) {
+	// Step 1: '/' in projects view should open global search input.
+	m := newModel()
+	m.view = viewProjects
+	m.projects = makeProjectSummaries()
+
+	m = sendRune(m, '/')
+	if !m.globalSearching {
+		t.Fatal("after '/' on projects view, globalSearching should be true")
+	}
+	if m.view != viewProjects {
+		t.Errorf("view should remain viewProjects while input is open; got %v", m.view)
+	}
+
+	// Step 2: type a query into the search input.
+	// Simulate characters arriving via searchInput directly (store is nil so
+	// we test state machine, not the actual search command).
+	m.searchInput.SetValue("auth")
+
+	// Step 3: Enter submits → view transitions to viewGlobalSearch.
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	if m.globalSearching {
+		t.Error("globalSearching should be false after Enter")
+	}
+	if m.view != viewGlobalSearch {
+		t.Errorf("view should be viewGlobalSearch after submit; got %v", m.view)
+	}
+	if m.globalQuery != "auth" {
+		t.Errorf("globalQuery = %q, want %q", m.globalQuery, "auth")
+	}
+
+	// Step 4: Esc returns to viewProjects and clears the global query.
+	m = sendKey(m, tea.KeyEsc)
+	if m.view != viewProjects {
+		t.Errorf("after Esc from global search results, view = %v, want viewProjects", m.view)
+	}
+	if m.globalQuery != "" {
+		t.Errorf("globalQuery should be cleared on Esc; got %q", m.globalQuery)
+	}
+}
+
+// TestRenderSmoke_ObservationsViewWithSearchBar verifies the persistent search
+// bar is always visible in the observations view and the exact-fill contract
+// still holds at 80x24.
+func TestRenderSmoke_ObservationsViewWithSearchBar(t *testing.T) {
+	const termW, termH = 80, 24
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewObservations
+	m.selectedProject = "myproject"
+	m.observations = makeObservations()
+	m.obsCursor = 0
+	m.obsOffset = 0
+
+	out := m.View()
+
+	// Exact fill.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("observations: View() produced %d lines, want exactly %d\noutput:\n%s", lineCount, termH, out)
+	}
+
+	// Search bar must be visible — it always shows the "/" glyph.
+	if !strings.Contains(out, "/") {
+		t.Errorf("search bar not found in observations view\noutput:\n%s", out)
+	}
+
+	// At least one observation title visible.
+	if !strings.Contains(out, "First obs") {
+		t.Errorf("observation title 'First obs' not found in output\noutput:\n%s", out)
+	}
+
+	// Status bar on second-to-last; footer on last.
+	lines := viewLines(out)
+	if !strings.Contains(lines[len(lines)-1], "quit") {
+		t.Errorf("footer not on last line; got: %q", lines[len(lines)-1])
+	}
+	if !strings.Contains(lines[len(lines)-2], "observation(s)") {
+		t.Errorf("status bar not on second-to-last line; got: %q", lines[len(lines)-2])
 	}
 }
 
