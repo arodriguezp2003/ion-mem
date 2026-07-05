@@ -23,8 +23,10 @@ const (
 	viewProjects viewState = iota
 	viewObservations
 	viewDetail
-	viewGlobalSearch // cross-project search results — observations list with project column
-	viewConfig       // embeddings / Ollama settings
+	viewGlobalSearch    // cross-project search results — observations list with project column
+	viewConfig          // embeddings / Ollama settings
+	viewHistory         // revision history list for the selected observation
+	viewRevisionContent // read-only viewport for a single historical revision
 )
 
 // ─── config row indices ───────────────────────────────────────────────────────
@@ -132,11 +134,12 @@ type configRegenResultMsg struct {
 // bbsFooter renders the BBS-style key legend. It is context-sensitive:
 // the observations and detail views include the Delete action.
 const (
-	bbsFooterBase   = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [C] CONFIG  [ESC] BACK  [Q] QUIT"
-	bbsFooterDelete = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [D] DELETE  [ESC] BACK  [Q] QUIT"
-	bbsFooterDetail = "[↑↓] SCROLL  [D] DELETE  [ESC] BACK  [Q] QUIT"
-	bbsFooterSearch = "[⏎] SUBMIT  [ESC] CANCEL"
-	bbsFooterConfig = "[↑↓] MOVE  [⏎] EDIT/RUN  [ESC] BACK  [Q] QUIT"
+	bbsFooterBase          = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [C] CONFIG  [ESC] BACK  [Q] QUIT"
+	bbsFooterDelete        = "[↑↓] MOVE  [⏎] OPEN  [/] SEARCH  [F] FILTER  [D] DELETE  [ESC] BACK  [Q] QUIT"
+	bbsFooterDetail        = "[↑↓] SCROLL  [D] DELETE  [E] EDIT TITLE  [T] TYPE  [ESC] BACK  [Q] QUIT"
+	bbsFooterDetailHistory = "[↑↓] SCROLL  [H] HISTORY  [D] DELETE  [E] EDIT TITLE  [T] TYPE  [ESC] BACK  [Q] QUIT"
+	bbsFooterSearch        = "[⏎] SUBMIT  [ESC] CANCEL"
+	bbsFooterConfig        = "[↑↓] MOVE  [⏎] EDIT/RUN  [ESC] BACK  [Q] QUIT"
 )
 
 // ─── theme ────────────────────────────────────────────────────────────────────
@@ -353,6 +356,12 @@ type Model struct {
 	obsCursor       int
 	obsOffset       int // first visible index in the windowed observations list
 
+	// Observations pagination and type filter (Task 3).
+	obsPageSize   int    // page size; 0 = use obsDefaultPageSize
+	obsOffset2    int    // SQL OFFSET for next load-more (page-based)
+	obsLoading    bool   // true while a load-more fetch is in flight
+	obsTypeFilter string // active type filter; "" = ALL
+
 	// Search (per-project observations view).
 	searching     bool
 	searchQuery   string
@@ -367,6 +376,23 @@ type Model struct {
 	// Detail view.
 	selectedObs *store.Observation
 	vp          viewport.Model
+
+	// History view — revision list for the selected observation.
+	revisions  []store.Revision
+	histCursor int
+	histOffset int
+	// selectedRevision is the revision opened in viewRevisionContent.
+	selectedRevision *store.Revision
+	// revVP is the viewport used in viewRevisionContent for the body text.
+	revVP viewport.Model
+
+	// Inline edit state (Task 2: [E] EDIT TITLE in detail view).
+	detailEditing   bool
+	detailEditInput textinput.Model
+	detailEditOrig  string
+	// detailStatus is a transient message shown in the detail status bar.
+	detailStatus   string
+	detailStatusOK bool
 
 	// Delete confirm.
 	confirmDelete bool
@@ -465,9 +491,14 @@ func newModel() Model {
 	ci := textinput.New()
 	ci.CharLimit = 256
 
+	ei := textinput.New()
+	ei.CharLimit = 256
+	ei.Placeholder = "new title…"
+
 	return Model{
 		searchInput:     ti,
 		configInput:     ci,
+		detailEditInput: ei,
 		configOllamaURL: "http://localhost:11434",
 		configModel:     "nomic-embed-text",
 		view:            viewProjects,
@@ -523,7 +554,7 @@ func (m Model) showLogo() bool {
 // computed correctly.
 //
 // Fixed lines: title(1) + type/badge(1) + project/scope(1) + created(1) + updated(1) + rule(1) = 6.
-// Optional lines: +1 for topic_key if set, +1 for sync_id if set.
+// Optional lines: +1 for topic_key if set, +1 for sync_id if set, +1 for revisions if RevisionCount > 1.
 func (m Model) detailMetaLineCount() int {
 	const fixed = 6
 	if m.selectedObs == nil {
@@ -534,6 +565,9 @@ func (m Model) detailMetaLineCount() int {
 		extra++
 	}
 	if m.selectedObs.SyncID != "" {
+		extra++
+	}
+	if m.selectedObs.RevisionCount > 1 {
 		extra++
 	}
 	return fixed + extra
@@ -628,7 +662,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.obsCursor = 0
 		}
 		m.obsOffset = 0
+		// Reset pagination state: offset2 is the length of the first page (for load-more).
+		pageSize := m.obsPageSize
+		if pageSize <= 0 {
+			pageSize = obsDefaultPageSize
+		}
+		m.obsOffset2 = len(msg.observations)
+		m.obsLoading = false
 		m.confirmDelete = false
+		return m, nil
+
+	case obsLoadMoreMsg:
+		prevLen := len(m.observations)
+		m.observations = append(m.observations, msg.observations...)
+		m.obsOffset2 = msg.nextOffset
+		m.obsLoading = false
+		// Advance cursor into the first row of the new page.
+		if len(msg.observations) > 0 {
+			m.obsCursor = prevLen
+			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
+		}
 		return m, nil
 
 	case searchResultMsg:
@@ -645,6 +698,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case searchSubmitMsg:
 		m.searching = false
 		return m, m.runSearch(msg.query)
+
+	case revisionsLoadedMsg:
+		m.revisions = msg.revisions
+		if m.revisions == nil {
+			m.revisions = []store.Revision{}
+		}
+		return m, nil
+
+	case obsUpdateResultMsg:
+		if msg.err == nil && msg.obs.ID != 0 {
+			// Refresh selectedObs with the server-side version.
+			m.selectedObs = &msg.obs
+			m.vp.SetContent(renderObservationDetail(msg.obs))
+		}
+		m.detailStatus = msg.statusMsg
+		m.detailStatusOK = msg.err == nil
+		return m, nil
 
 	case deleteResultMsg:
 		return m, m.fetchObservations(msg.project)
@@ -770,10 +840,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Delegate scroll events to viewport in detail view.
+	// Delegate scroll events to viewport in detail / revision content views.
 	if m.view == viewDetail {
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
+	}
+	if m.view == viewRevisionContent {
+		var cmd tea.Cmd
+		m.revVP, cmd = m.revVP.Update(msg)
 		return m, cmd
 	}
 
@@ -860,6 +935,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyGlobalSearch(msg)
 	case viewConfig:
 		return m.handleKeyConfig(msg)
+	case viewHistory:
+		return m.handleKeyHistory(msg)
+	case viewRevisionContent:
+		return m.handleKeyRevisionContent(msg)
 	}
 	return m, nil
 }
@@ -911,6 +990,14 @@ func (m Model) handleKeyProjects(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Type == tea.KeyEsc:
+		// First Esc clears the type filter when one is active.
+		if m.obsTypeFilter != "" {
+			m.obsTypeFilter = ""
+			m.obsCursor = 0
+			m.obsOffset = 0
+			m.obsOffset2 = 0
+			return m, m.fetchObservations(m.selectedProject)
+		}
 		m.view = viewProjects
 		m.searching = false
 		m.searchQuery = ""
@@ -925,6 +1012,10 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.obsCursor < len(m.observations)-1 {
 			m.obsCursor++
 			m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
+		} else if m.shouldLoadMore() {
+			// At last row and there may be more — trigger load-more.
+			m.obsLoading = true
+			return m, m.fetchMoreObservations()
 		}
 	case msg.Type == tea.KeyEnter:
 		if len(m.observations) == 0 {
@@ -950,6 +1041,13 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.observations) > 0 {
 			m.confirmDelete = true
 		}
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'f':
+		// Cycle type filter and refetch page 0.
+		m.obsTypeFilter = nextObsTypeFilter(m.obsTypeFilter)
+		m.obsCursor = 0
+		m.obsOffset = 0
+		m.obsOffset2 = 0
+		return m, m.fetchObservationsFiltered()
 	}
 	return m, nil
 }
@@ -993,6 +1091,11 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKeyDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When inline title edit is open, delegate all keys to the edit handler.
+	if m.detailEditing {
+		return m.handleDetailEditKey(msg)
+	}
+
 	switch {
 	case msg.Type == tea.KeyEsc:
 		// Return to the view that opened the detail. Default to viewObservations
@@ -1006,6 +1109,25 @@ func (m Model) handleKeyDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'd':
 		if m.selectedObs != nil {
 			m.confirmDelete = true
+		}
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'h':
+		// Open history view — only when the observation has more than one revision.
+		if m.selectedObs != nil && m.selectedObs.RevisionCount > 1 {
+			m.view = viewHistory
+			m.revisions = nil
+			m.histCursor = 0
+			m.histOffset = 0
+			return m, m.fetchRevisions()
+		}
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'e':
+		// Edit title — handled in edit.go; delegated below by returning here.
+		if m.selectedObs != nil {
+			return m.startTitleEdit()
+		}
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 't':
+		// Cycle type — handled in edit.go.
+		if m.selectedObs != nil {
+			return m.cycleObsType()
 		}
 	default:
 		var cmd tea.Cmd
@@ -1030,6 +1152,10 @@ func (m Model) View() string {
 		return m.viewGlobalSearchResults()
 	case viewConfig:
 		return m.viewConfigPage()
+	case viewHistory:
+		return m.viewHistoryPage()
+	case viewRevisionContent:
+		return m.viewRevisionContentPage()
 	}
 	return ""
 }
@@ -1187,11 +1313,19 @@ func (m Model) renderFooter() string {
 	var hint string
 	switch m.view {
 	case viewDetail:
-		hint = bbsFooterDetail
+		if m.selectedObs != nil && m.selectedObs.RevisionCount > 1 {
+			hint = bbsFooterDetailHistory
+		} else {
+			hint = bbsFooterDetail
+		}
 	case viewObservations, viewGlobalSearch:
 		hint = bbsFooterDelete
 	case viewConfig:
 		hint = bbsFooterConfig
+	case viewHistory:
+		hint = bbsFooterHistory
+	case viewRevisionContent:
+		hint = bbsFooterRevisionContent
 	default:
 		hint = bbsFooterBase
 	}
@@ -1460,20 +1594,37 @@ func (m Model) viewObservations() string {
 	if pos != "" {
 		statusLeft += "  " + pos
 	}
+	// Loading indicator when a load-more fetch is in flight.
+	if m.obsLoading {
+		statusLeft += "  LOADING…"
+	}
 	if m.err != nil {
 		statusLeft = "ERROR: " + m.err.Error()
 	}
 
-	// Build status line: left context + optional fuzzy/hybrid chip right-aligned.
+	// Build status line: left context + optional fuzzy/hybrid/filter chip right-aligned.
 	var statusLine string
-	if m.searchQuery != "" && (m.fuzzyResults || m.hybridResults) {
-		var chip string
-		if m.hybridResults {
-			chip = hybridChipStyle.Render("~HYBRID")
-		} else {
-			chip = fuzzyChipStyle.Render("~FUZZY")
+	buildChip := func() string {
+		if m.obsTypeFilter != "" {
+			badge := renderBadge(m.obsTypeFilter)
+			return fuzzyChipStyle.Render("FILTER: " + stripAnsiCodes(badge))
 		}
-		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
+		if m.searchQuery != "" && m.hybridResults {
+			return hybridChipStyle.Render("~HYBRID")
+		}
+		if m.searchQuery != "" && m.fuzzyResults {
+			return fuzzyChipStyle.Render("~FUZZY")
+		}
+		return ""
+	}
+
+	chip := buildChip()
+	leftLabel := statusLeft
+	if m.searchQuery != "" && m.obsTypeFilter == "" {
+		leftLabel += fmt.Sprintf("  %q", m.searchQuery)
+	}
+	leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(leftLabel)
+	if chip != "" {
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
 			chipW := lipgloss.Width(chip)
@@ -1485,10 +1636,8 @@ func (m Model) viewObservations() string {
 		} else {
 			statusLine = leftPart + "  " + chip
 		}
-	} else if m.searchQuery != "" {
-		statusLine = strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
 	} else {
-		statusLine = strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
+		statusLine = leftPart
 	}
 
 	footerLine := strings.Repeat(" ", cOffset+leftPad) + m.renderFooter()
@@ -1687,6 +1836,11 @@ func (m Model) viewDetail() string {
 	content.WriteString(metaIndent + labelStyle.Render("CREATED") + dimStyle.Render(obs.CreatedAt) + "\n")
 	content.WriteString(metaIndent + labelStyle.Render("UPDATED") + dimStyle.Render(obs.UpdatedAt) + "\n")
 
+	// Revisions line — only when the observation has been revised (RevisionCount > 1).
+	if obs.RevisionCount > 1 {
+		content.WriteString(metaIndent + labelStyle.Render("REVISIONS") + dimStyle.Render(fmt.Sprintf("%d", obs.RevisionCount)) + "\n")
+	}
+
 	// Double-rule separator between meta and body (═), capped at effective content width.
 	ruleWidth := cWidth
 	if ruleWidth < 1 {
@@ -1720,6 +1874,14 @@ func (m Model) viewDetail() string {
 		statusText += fmt.Sprintf("  %.0f%%", m.vp.ScrollPercent()*100)
 	} else {
 		statusText += "  SCROLL ↑↓"
+	}
+	// Transient status message (title saved, type changed, etc.).
+	if m.detailStatus != "" {
+		if m.detailStatusOK {
+			statusText += "  " + m.detailStatus
+		} else {
+			statusText += "  ERR: " + m.detailStatus
+		}
 	}
 	if m.err != nil {
 		statusText = "ERROR: " + m.err.Error()
