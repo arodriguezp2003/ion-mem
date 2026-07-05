@@ -11,7 +11,7 @@ import (
 // buildSearchTool constructs the ion_search ServerTool.
 func buildSearchTool(s *Server) mcpserver.ServerTool {
 	tool := mcplib.NewTool("ion_search",
-		mcplib.WithDescription("Full-text search over saved observations using BM25 ranking. Returns envelope with results array and count. When the all-terms query matches nothing, retries with OR between terms and sets fuzzy:true. Zero results returns results:[] (never a Go error)."),
+		mcplib.WithDescription("Full-text search over saved observations using weighted BM25 ranking with recency decay. Returns envelope with results array and count; content_preview is a contextual snippet around the match term. When the all-terms query matches nothing, retries with OR between terms and sets fuzzy:true. Zero results returns results:[] (never a Go error)."),
 		mcplib.WithString("query", mcplib.Description("Search query (required)."), mcplib.Required()),
 		mcplib.WithString("type", mcplib.Description("Filter by observation type.")),
 		mcplib.WithString("project", mcplib.Description("Project override.")),
@@ -62,12 +62,17 @@ func handleSearch(s *Server) toolHandler {
 			return textResult(raw), nil
 		}
 
-		// Build result rows with content_preview capped at 300 chars.
+		// Build result rows. content_preview uses Snippet when non-empty (contextual
+		// excerpt around the match term), falling back to the first 300 bytes of
+		// content so that short docs always produce a usable preview.
 		rows := make([]map[string]any, 0, len(results))
 		for _, r := range results {
-			preview := r.Observation.Content
-			if len(preview) > 300 {
-				preview = preview[:300]
+			preview := r.Snippet
+			if preview == "" {
+				preview = r.Observation.Content
+				if len(preview) > 300 {
+					preview = preview[:300]
+				}
 			}
 			row := map[string]any{
 				"id":              r.Observation.ID,
