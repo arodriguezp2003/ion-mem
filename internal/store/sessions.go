@@ -207,6 +207,26 @@ func scanSessionRow(rows *sql.Rows) (Session, error) {
 	return sess, nil
 }
 
+// EndStaleSessions ends all sessions with status=active whose started_at is
+// strictly before the cutoff (an RFC3339 string). Returns the number of sessions
+// ended. Sessions that are already ended are not touched.
+func (s *Store) EndStaleSessions(ctx context.Context, cutoff string) (int64, error) {
+	now := nowISO()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE sessions SET ended_at=?, status='ended'
+		 WHERE status='active' AND started_at < ?`,
+		now, cutoff,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("store.EndStaleSessions: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("store.EndStaleSessions rows affected: %w", err)
+	}
+	return n, nil
+}
+
 // isForeignKeyError returns true if err is a SQLite FOREIGN KEY constraint error.
 func isForeignKeyError(err error) bool {
 	if err == nil {
