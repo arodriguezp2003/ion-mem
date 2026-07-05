@@ -351,6 +351,275 @@ func TestWide_120x30_LiteralView(t *testing.T) {
 	_ = fmt.Sprintf
 }
 
+// ─── Observations view — centering at 200x55 ─────────────────────────────────
+
+// makeWideObs returns a slice of fake observations for wide-terminal tests.
+// It uses longer titles so column layout is exercised realistically.
+func makeWideObs() []store.Observation {
+	types := []string{"decision", "architecture", "bugfix"}
+	obs := make([]store.Observation, 6)
+	for i := range obs {
+		obs[i] = store.Observation{
+			ID:        int64(i + 1),
+			Project:   "alpha",
+			Title:     fmt.Sprintf("observation title number %d", i+1),
+			Type:      types[i%len(types)],
+			Scope:     "project",
+			Content:   "content",
+			CreatedAt: time.Now().Add(-time.Duration(i+1) * time.Hour).Format(time.RFC3339Nano),
+			UpdatedAt: time.Now().Add(-time.Duration(i+1) * time.Hour).Format(time.RFC3339Nano),
+		}
+	}
+	return obs
+}
+
+// TestWide_ObsViewExactFill_200x55 asserts that viewObservations fills exactly
+// 200x55 lines at a wide terminal.
+func TestWide_ObsViewExactFill_200x55(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewObservations
+	m.selectedProject = "alpha"
+	m.observations = makeWideObs()
+	m.obsCursor = 0
+	m.obsOffset = 0
+
+	out := m.View()
+
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("viewObservations at 200x55: View() produced %d lines, want %d", lineCount, termH)
+	}
+}
+
+// TestWide_ObsRowsCenteredAt200 asserts that observation list rows are
+// indented by cOffset+leftPad (≥ 40) and that the date column falls inside
+// the max-width block (not at col ~195).
+func TestWide_ObsRowsCenteredAt200(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewObservations
+	m.selectedProject = "alpha"
+	m.observations = makeWideObs()
+	m.obsCursor = 0
+	m.obsOffset = 0
+
+	out := m.View()
+	lines := viewLines(out)
+
+	// Find the first observation row (contains first observation title).
+	rowIdx := -1
+	for i, l := range lines {
+		if strings.Contains(stripAnsiCodes(l), "observation title number 1") {
+			rowIdx = i
+			break
+		}
+	}
+	if rowIdx < 0 {
+		t.Fatal("first observation row not found in output")
+	}
+
+	rowPlain := stripAnsiCodes(lines[rowIdx])
+
+	// Visual width of the row must not extend past cOffset+contentMaxWidth (generous: ≤ 160).
+	visualWidth := len([]rune(strings.TrimRight(rowPlain, " ")))
+	if visualWidth > 160 {
+		t.Errorf("observation row extends to col %d; expected ≤160 with centering", visualWidth)
+	}
+
+	// Leading indent must be ≥ 40 (cOffset=50 or at least meaningful centering applied).
+	leading := len(rowPlain) - len(strings.TrimLeft(rowPlain, " ▌"))
+	if leading < 40 {
+		t.Errorf("observation row leading indent = %d, expected ≥40 (centering offset on 200-wide terminal)",
+			leading)
+	}
+
+	// Date ("ago") must be present somewhere in the row.
+	if !strings.Contains(rowPlain, "ago") {
+		t.Errorf("observation row does not contain date 'ago': %q", rowPlain[:minW(len(rowPlain), 120)])
+	}
+}
+
+// TestWide_ObsStatusAndFooterCenteredAt200 asserts that the status bar and
+// footer in the observations view are indented to the centering offset on a
+// 200-wide terminal (not just leftPad=2).
+func TestWide_ObsStatusAndFooterCenteredAt200(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewObservations
+	m.selectedProject = "alpha"
+	m.observations = makeWideObs()
+	m.obsCursor = 0
+	m.obsOffset = 0
+
+	out := m.View()
+	lines := viewLines(out)
+	if len(lines) < 2 {
+		t.Fatal("fewer than 2 lines")
+	}
+
+	statusLine := stripAnsiCodes(lines[len(lines)-2])
+	footerLine := stripAnsiCodes(lines[len(lines)-1])
+
+	statusLeading := len(statusLine) - len(strings.TrimLeft(statusLine, " "))
+	footerLeading := len(footerLine) - len(strings.TrimLeft(footerLine, " "))
+
+	if statusLeading < 40 {
+		t.Errorf("obs status bar leading spaces = %d, expected ≥40 (centering offset on 200-wide terminal)",
+			statusLeading)
+	}
+	if footerLeading < 40 {
+		t.Errorf("obs footer leading spaces = %d, expected ≥40 (centering offset on 200-wide terminal)",
+			footerLeading)
+	}
+}
+
+// ─── Detail view — centering at 200x55 ───────────────────────────────────────
+
+// TestWide_DetailViewExactFill_200x55 asserts that viewDetail fills exactly
+// 200x55 lines at a wide terminal.
+func TestWide_DetailViewExactFill_200x55(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewDetail
+	obs := makeWideObs()[0]
+	m.selectedObs = &obs
+	m.selectedProject = "alpha"
+
+	out := m.View()
+
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("viewDetail at 200x55: View() produced %d lines, want %d", lineCount, termH)
+	}
+}
+
+// TestWide_DetailMetaCenteredAt200 asserts that the horizontal rule in
+// viewDetail is indented to the centering offset on a 200-wide terminal.
+func TestWide_DetailMetaCenteredAt200(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewDetail
+	obs := makeWideObs()[0]
+	m.selectedObs = &obs
+	m.selectedProject = "alpha"
+
+	out := m.View()
+	lines := viewLines(out)
+
+	// Find the horizontal rule row (a line that, after stripping leading/trailing
+	// spaces, consists entirely of "─" characters).
+	// Skip the first 2 chrome lines (header + separator) to avoid hitting the
+	// full-width separator bar, which also consists of "─".
+	ruleIdx := -1
+	for i := 2; i < len(lines); i++ {
+		plain := stripAnsiCodes(lines[i])
+		inner := strings.Trim(plain, " ")
+		if len(inner) > 0 && strings.TrimRight(inner, "─") == "" {
+			ruleIdx = i
+			break
+		}
+	}
+	if ruleIdx < 0 {
+		t.Fatal("horizontal rule not found in viewDetail output (after header chrome)")
+	}
+
+	ruleLine := stripAnsiCodes(lines[ruleIdx])
+	// Rule must not extend the full 200 cols — centering capped at effectiveWidth.
+	// Visual width = leading spaces (cOffset) + rule chars (cWidth) ≤ 150 on this terminal.
+	visualWidth := len([]rune(strings.TrimRight(ruleLine, " ")))
+	if visualWidth > 150 {
+		t.Errorf("detail rule extends to col %d; expected ≤150 with centering (effectiveWidth enforced)",
+			visualWidth)
+	}
+}
+
+// TestWide_DetailStatusAndFooterCenteredAt200 asserts that the status bar and
+// footer in viewDetail are indented to the centering offset on 200-wide terminals.
+func TestWide_DetailStatusAndFooterCenteredAt200(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewDetail
+	obs := makeWideObs()[0]
+	m.selectedObs = &obs
+	m.selectedProject = "alpha"
+
+	out := m.View()
+	lines := viewLines(out)
+	if len(lines) < 2 {
+		t.Fatal("fewer than 2 lines")
+	}
+
+	statusLine := stripAnsiCodes(lines[len(lines)-2])
+	footerLine := stripAnsiCodes(lines[len(lines)-1])
+
+	statusLeading := len(statusLine) - len(strings.TrimLeft(statusLine, " "))
+	footerLeading := len(footerLine) - len(strings.TrimLeft(footerLine, " "))
+
+	if statusLeading < 40 {
+		t.Errorf("detail status bar leading spaces = %d, expected ≥40 (centering offset on 200-wide terminal)",
+			statusLeading)
+	}
+	if footerLeading < 40 {
+		t.Errorf("detail footer leading spaces = %d, expected ≥40 (centering offset on 200-wide terminal)",
+			footerLeading)
+	}
+}
+
+// ─── Global search view — centering at 200x55 ────────────────────────────────
+
+// TestWide_GlobalSearchCenteredAt200 asserts that global search result rows are
+// centered on a 200-wide terminal (indented ≥40, visual width ≤160).
+func TestWide_GlobalSearchCenteredAt200(t *testing.T) {
+	const termW, termH = 200, 55
+	m := newModel()
+	m = setSize(m, termW, termH)
+	m.view = viewGlobalSearch
+	m.globalQuery = "observation"
+	m.observations = makeWideObs()
+	m.obsCursor = 0
+	m.obsOffset = 0
+
+	out := m.View()
+	lines := viewLines(out)
+
+	// Exact fill.
+	lineCount := strings.Count(out, "\n")
+	if lineCount != termH {
+		t.Errorf("viewGlobalSearch at 200x55: View() produced %d lines, want %d", lineCount, termH)
+	}
+
+	// Find first result row.
+	rowIdx := -1
+	for i, l := range lines {
+		if strings.Contains(stripAnsiCodes(l), "observation title number 1") {
+			rowIdx = i
+			break
+		}
+	}
+	if rowIdx < 0 {
+		t.Fatal("first global search result row not found in output")
+	}
+
+	rowPlain := stripAnsiCodes(lines[rowIdx])
+	visualWidth := len([]rune(strings.TrimRight(rowPlain, " ")))
+	if visualWidth > 160 {
+		t.Errorf("global search row extends to col %d; expected ≤160 with centering", visualWidth)
+	}
+
+	leading := len(rowPlain) - len(strings.TrimLeft(rowPlain, " ▌"))
+	if leading < 40 {
+		t.Errorf("global search row leading indent = %d, expected ≥40 (centering offset on 200-wide terminal)",
+			leading)
+	}
+}
+
 // ─── helper ──────────────────────────────────────────────────────────────────
 
 func minW(a, b int) int {

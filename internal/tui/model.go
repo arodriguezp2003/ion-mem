@@ -343,6 +343,40 @@ func (m Model) showLogo() bool {
 	return m.height >= logoMinTermHeight
 }
 
+// detailMetaLineCount returns the number of content-area lines consumed by the
+// metadata block in viewDetail for the currently selected observation. This must
+// match the lines written by viewDetail exactly so that the viewport height is
+// computed correctly.
+//
+// Fixed lines: title(1) + type/badge(1) + project/scope(1) + created(1) + updated(1) + rule(1) = 6.
+// Optional lines: +1 for topic_key if set, +1 for sync_id if set.
+func (m Model) detailMetaLineCount() int {
+	const fixed = 6
+	if m.selectedObs == nil {
+		return fixed
+	}
+	extra := 0
+	if m.selectedObs.TopicKey != nil && *m.selectedObs.TopicKey != "" {
+		extra++
+	}
+	if m.selectedObs.SyncID != "" {
+		extra++
+	}
+	return fixed + extra
+}
+
+// detailVPHeight returns the viewport height for the detail view: the number of
+// content-area rows available after subtracting chrome (header+separator) and
+// the metadata block.
+func (m Model) detailVPHeight() int {
+	meta := m.detailMetaLineCount()
+	h := m.height - headerRows - statusRows - meta
+	if h < 1 {
+		h = 1
+	}
+	return h
+}
+
 // clampWindow adjusts offset so the invariant holds:
 //
 //	offset <= cursor < offset+visible
@@ -393,18 +427,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Recompute viewport height for detail view.
-		// Content area = height - headerRows - statusRows.
-		// Inside the content area the metadata block uses at minimum 4 lines
-		// (title, type/project/scope, created/updated, horizontal rule).
-		// The viewport gets the remainder.
-		const detailMetaLines = 4
-		vpHeight := msg.Height - headerRows - statusRows - detailMetaLines
-		if vpHeight < 1 {
-			vpHeight = 1
-		}
-		m.vp.Width = msg.Width
-		m.vp.Height = vpHeight
+		// Recompute viewport for detail view.
+		// Viewport width is capped at effectiveWidth so content does not scatter
+		// across an excessively wide screen on wide terminals.
+		m.vp.Width = effectiveWidth(msg.Width)
+		m.vp.Height = m.detailVPHeight()
 		// Reclaim window after resize so cursor stays visible.
 		m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
 		m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
@@ -610,6 +637,10 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		obs := m.observations[m.obsCursor]
 		m.selectedObs = &obs
+		// Refresh viewport dimensions for the newly selected observation.
+		// Width is capped at effectiveWidth so content aligns with the centred block.
+		m.vp.Width = effectiveWidth(m.width)
+		m.vp.Height = m.detailVPHeight()
 		m.vp.SetContent(renderObservationDetail(obs))
 		m.vp.GotoTop()
 		m.view = viewDetail
@@ -653,6 +684,9 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		obs := m.observations[m.obsCursor]
 		m.selectedObs = &obs
 		m.selectedProject = obs.Project
+		// Refresh viewport dimensions for the newly selected observation.
+		m.vp.Width = effectiveWidth(m.width)
+		m.vp.Height = m.detailVPHeight()
 		m.vp.SetContent(renderObservationDetail(obs))
 		m.vp.GotoTop()
 		m.view = viewDetail
@@ -771,13 +805,15 @@ func (m Model) renderLogoHero(version string) string {
 // It returns a string with exactly searchBarRows lines (each terminated by "\n").
 // When focused (searching=true), the border is accent-colored and shows live input.
 // When idle, the border is muted and shows a dim placeholder prompt.
-func (m Model) renderSearchBar() string {
-	w := m.width
-	if w < 20 {
-		w = 20
+//
+// cOffset is the centering left-indent (0 on narrow terminals); cWidth is the
+// effective column budget (≤ contentMaxWidth).
+func (m Model) renderSearchBar(cOffset, cWidth int) string {
+	if cWidth < 20 {
+		cWidth = 20
 	}
-	// Inner width: full width minus border (2 cols) minus padding (2 each side = 4).
-	innerW := w - 6
+	// Inner width: effective content width minus border (2 cols) minus padding (2 each side = 4).
+	innerW := cWidth - 6
 	if innerW < 5 {
 		innerW = 5
 	}
@@ -799,9 +835,9 @@ func (m Model) renderSearchBar() string {
 	if m.searching {
 		style = searchBarActiveStyle
 	}
-	// Force the box to span full width.
+	// Render the box within the effective content width, then apply centering offset.
 	rendered := style.Width(innerW).Render(inner)
-	return rendered + "\n"
+	return strings.Repeat(" ", cOffset) + rendered + "\n"
 }
 
 // renderSeparator renders a full-width horizontal rule in muted style.
@@ -1027,11 +1063,20 @@ func (m Model) viewObservations() string {
 	header := m.renderHeader(breadcrumb)
 	separator := m.renderSeparator()
 
+	// Wide-terminal layout helpers: content is capped at contentMaxWidth and
+	// centred horizontally when the terminal is wider.
+	cOffset := contentOffset(m.width) // extra left indent for centering
+	cWidth := effectiveWidth(m.width) // column budget for content rows
+	if cWidth < 40 {
+		cWidth = 40
+	}
+	rowIndent := strings.Repeat(" ", cOffset+leftPad)
+
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
 	// Persistent search bar — always visible between header and list.
-	content.WriteString(m.renderSearchBar())
+	content.WriteString(m.renderSearchBar(cOffset, cWidth))
 
 	if len(m.observations) == 0 {
 		var emptyMsg string
@@ -1040,7 +1085,7 @@ func (m Model) viewObservations() string {
 		} else {
 			emptyMsg = "No observations yet."
 		}
-		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(emptyMsg) + "\n")
+		content.WriteString(rowIndent + dimStyle.Render(emptyMsg) + "\n")
 	} else {
 		visible := m.listVisibleHeight(true, false)
 		offset := m.obsOffset
@@ -1048,7 +1093,7 @@ func (m Model) viewObservations() string {
 
 		showUp, showDown := overflowMarkers(offset, visible, total)
 		if showUp {
-			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
+			content.WriteString(rowIndent + mutedStyle.Render("↑ more") + "\n")
 		}
 
 		// Badge: badgeInnerWidth chars of rendered content.
@@ -1057,9 +1102,9 @@ func (m Model) viewObservations() string {
 		badgeRenderedWidth := badgeInnerWidth // visual columns consumed by badge (no border)
 		ageWidth := 10
 		titleWidth := 50
-		if m.width > 40 {
-			// leftPad + badgeRenderedWidth + 1 (space) + titleWidth + gap + ageWidth + rightPad = width
-			titleWidth = m.width - leftPad - badgeRenderedWidth - 1 - ageWidth - rightPad
+		if cWidth > 40 {
+			// leftPad + badgeRenderedWidth + 1 (space) + titleWidth + gap + ageWidth + rightPad = cWidth
+			titleWidth = cWidth - leftPad - badgeRenderedWidth - 1 - ageWidth - rightPad
 			if titleWidth < 10 {
 				titleWidth = 10
 			}
@@ -1075,25 +1120,24 @@ func (m Model) viewObservations() string {
 			ageStr := humanizeTime(parseCreatedAt(obs.CreatedAt))
 			title := truncStr(obs.Title, titleWidth)
 
-			// Right-align age: pad so age ends at width-rightPad.
+			// Right-align age: pad so age ends at cWidth-rightPad (within the centred block).
 			var row string
 			if m.width > 0 {
 				titleFmt := fmt.Sprintf("%-*s", titleWidth, title)
-				// Compute gap between title and age to right-align age.
+				// Compute gap between title and age to right-align age within effective width.
 				// raw chars used so far: leftPad + badgeRenderedWidth + 1 (space) + titleWidth
 				usedLeft := leftPad + badgeRenderedWidth + 1 + titleWidth
-				gap := m.width - usedLeft - len(ageStr) - rightPad
+				gap := cWidth - usedLeft - len(ageStr) - rightPad
 				if gap < 1 {
 					gap = 1
 				}
 				ageRendered := dimStyle.Render(ageStr)
 				if i == m.obsCursor {
-					indicator := selectedRowStyle.Render("▌") + " "
+					indicator := strings.Repeat(" ", cOffset) + selectedRowStyle.Render("▌") + " "
 					titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(titleFmt)
-					// Indicator occupies leftPad chars (▌ + space).
 					row = indicator + badge + " " + titleStr + strings.Repeat(" ", gap) + ageRendered
 				} else {
-					row = strings.Repeat(" ", leftPad) + badge + " " + titleFmt + strings.Repeat(" ", gap) + ageRendered
+					row = rowIndent + badge + " " + titleFmt + strings.Repeat(" ", gap) + ageRendered
 				}
 			} else {
 				age := dimStyle.Render(ageStr)
@@ -1109,12 +1153,12 @@ func (m Model) viewObservations() string {
 		}
 
 		if showDown {
-			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↓ more") + "\n")
+			content.WriteString(rowIndent + mutedStyle.Render("↓ more") + "\n")
 		}
 	}
 
 	if m.confirmDelete {
-		content.WriteString("\n" + strings.Repeat(" ", leftPad) + confirmStyle.Render("Delete this observation? y/n") + "\n")
+		content.WriteString("\n" + rowIndent + confirmStyle.Render("Delete this observation? y/n") + "\n")
 	}
 
 	// ── status and footer ────────────────────────────────────────────────────
@@ -1131,7 +1175,7 @@ func (m Model) viewObservations() string {
 	var statusLine string
 	if m.searchQuery != "" && m.fuzzyResults {
 		chip := fuzzyChipStyle.Render("~fuzzy")
-		leftPart := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
+		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
 			chipW := lipgloss.Width(chip)
@@ -1144,12 +1188,12 @@ func (m Model) viewObservations() string {
 			statusLine = leftPart + "  " + chip
 		}
 	} else if m.searchQuery != "" {
-		statusLine = strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
+		statusLine = strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft+fmt.Sprintf("  %q", m.searchQuery))
 	} else {
-		statusLine = strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+		statusLine = strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 	}
 
-	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+	footerLine := strings.Repeat(" ", cOffset+leftPad) + m.renderFooter()
 
 	// ── compose full-height layout ───────────────────────────────────────────
 	contentRows := m.height - headerRows - statusRows
@@ -1174,6 +1218,14 @@ func (m Model) viewGlobalSearchResults() string {
 	header := m.renderHeader(breadcrumb)
 	separator := m.renderSeparator()
 
+	// Wide-terminal layout helpers.
+	cOffset := contentOffset(m.width)
+	cWidth := effectiveWidth(m.width)
+	if cWidth < 40 {
+		cWidth = 40
+	}
+	rowIndent := strings.Repeat(" ", cOffset+leftPad)
+
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
@@ -1184,7 +1236,7 @@ func (m Model) viewGlobalSearchResults() string {
 		} else {
 			emptyMsg = "No results."
 		}
-		content.WriteString(strings.Repeat(" ", leftPad) + dimStyle.Render(emptyMsg) + "\n")
+		content.WriteString(rowIndent + dimStyle.Render(emptyMsg) + "\n")
 	} else {
 		visible := m.listVisibleHeight(false, false)
 		offset := m.obsOffset
@@ -1192,7 +1244,7 @@ func (m Model) viewGlobalSearchResults() string {
 
 		showUp, showDown := overflowMarkers(offset, visible, total)
 		if showUp {
-			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
+			content.WriteString(rowIndent + mutedStyle.Render("↑ more") + "\n")
 		}
 
 		// Column layout: badge | title | project (dim) | age
@@ -1200,8 +1252,9 @@ func (m Model) viewGlobalSearchResults() string {
 		projColW := 14
 		ageWidth := 10
 		titleWidth := 30
-		if m.width > 60 {
-			titleWidth = m.width - leftPad - badgeW - 1 - projColW - 2 - ageWidth - rightPad
+		if cWidth > 60 {
+			// leftPad + badgeW + 1 + titleWidth + 2 + projColW + gap + ageWidth + rightPad = cWidth
+			titleWidth = cWidth - leftPad - badgeW - 1 - projColW - 2 - ageWidth - rightPad
 			if titleWidth < 10 {
 				titleWidth = 10
 			}
@@ -1221,24 +1274,24 @@ func (m Model) viewGlobalSearchResults() string {
 			titleFmt := fmt.Sprintf("%-*s", titleWidth, title)
 
 			usedLeft := leftPad + badgeW + 1 + titleWidth + 2 + projColW
-			gap := m.width - usedLeft - len(ageStr) - rightPad
+			gap := cWidth - usedLeft - len(ageStr) - rightPad
 			if gap < 1 {
 				gap = 1
 			}
 			ageRendered := dimStyle.Render(ageStr)
 			var row string
 			if i == m.obsCursor {
-				indicator := selectedRowStyle.Render("▌") + " "
+				indicator := strings.Repeat(" ", cOffset) + selectedRowStyle.Render("▌") + " "
 				titleStr := lipgloss.NewStyle().Bold(true).Foreground(defaultTheme.accent).Render(titleFmt)
 				row = indicator + badge + " " + titleStr + "  " + proj + strings.Repeat(" ", gap) + ageRendered
 			} else {
-				row = strings.Repeat(" ", leftPad) + badge + " " + titleFmt + "  " + proj + strings.Repeat(" ", gap) + ageRendered
+				row = rowIndent + badge + " " + titleFmt + "  " + proj + strings.Repeat(" ", gap) + ageRendered
 			}
 			content.WriteString(row + "\n")
 		}
 
 		if showDown {
-			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↓ more") + "\n")
+			content.WriteString(rowIndent + mutedStyle.Render("↓ more") + "\n")
 		}
 	}
 
@@ -1255,7 +1308,7 @@ func (m Model) viewGlobalSearchResults() string {
 	var statusLine string
 	if m.fuzzyResults {
 		chip := fuzzyChipStyle.Render("~fuzzy")
-		leftPart := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+		leftPart := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 		if m.width > 0 {
 			leftW := lipgloss.Width(leftPart)
 			chipW := lipgloss.Width(chip)
@@ -1268,10 +1321,10 @@ func (m Model) viewGlobalSearchResults() string {
 			statusLine = leftPart + "  " + chip
 		}
 	} else {
-		statusLine = strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+		statusLine = strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 	}
 
-	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+	footerLine := strings.Repeat(" ", cOffset+leftPad) + m.renderFooter()
 
 	// ── compose full-height layout ───────────────────────────────────────────
 	contentRows := m.height - headerRows - statusRows
@@ -1298,53 +1351,50 @@ func (m Model) viewDetail() string {
 	header := m.renderHeader(breadcrumb)
 	separator := m.renderSeparator()
 
+	// Wide-terminal layout helpers.
+	cOffset := contentOffset(m.width)
+	cWidth := effectiveWidth(m.width)
+	if cWidth < 40 {
+		cWidth = 40
+	}
+	metaIndent := strings.Repeat(" ", cOffset+leftPad)
+
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
 	// Metadata block — label:value grid with dim labels.
-	// Count lines precisely; viewport height is set in Update's WindowSizeMsg.
+	// Count lines precisely; viewport height is set in detailVPHeight().
 	labelStyle := lipgloss.NewStyle().Foreground(defaultTheme.dim).Width(10)
-	metaLines := 0
 
 	// Title row (full accent bold).
-	content.WriteString(strings.Repeat(" ", leftPad) + selectedRowStyle.Render(obs.Title) + "\n")
-	metaLines++
+	content.WriteString(metaIndent + selectedRowStyle.Render(obs.Title) + "\n")
 
 	// Type + badge inline.
-	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("type") + renderBadge(obs.Type) + "\n")
-	metaLines++
+	content.WriteString(metaIndent + labelStyle.Render("type") + renderBadge(obs.Type) + "\n")
 
 	// project / scope on same line.
-	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("project") + dimStyle.Render(obs.Project) + "   " + labelStyle.Render("scope") + dimStyle.Render(obs.Scope) + "\n")
-	metaLines++
+	content.WriteString(metaIndent + labelStyle.Render("project") + dimStyle.Render(obs.Project) + "   " + labelStyle.Render("scope") + dimStyle.Render(obs.Scope) + "\n")
 
 	if obs.TopicKey != nil && *obs.TopicKey != "" {
-		content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("topic_key") + dimStyle.Render(*obs.TopicKey) + "\n")
-		metaLines++
+		content.WriteString(metaIndent + labelStyle.Render("topic_key") + dimStyle.Render(*obs.TopicKey) + "\n")
 	}
 	if obs.SyncID != "" {
-		content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("sync_id") + mutedStyle.Render(obs.SyncID) + "\n")
-		metaLines++
+		content.WriteString(metaIndent + labelStyle.Render("sync_id") + mutedStyle.Render(obs.SyncID) + "\n")
 	}
-	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("created") + dimStyle.Render(obs.CreatedAt) + "\n")
-	metaLines++
-	content.WriteString(strings.Repeat(" ", leftPad) + labelStyle.Render("updated") + dimStyle.Render(obs.UpdatedAt) + "\n")
-	metaLines++
+	content.WriteString(metaIndent + labelStyle.Render("created") + dimStyle.Render(obs.CreatedAt) + "\n")
+	content.WriteString(metaIndent + labelStyle.Render("updated") + dimStyle.Render(obs.UpdatedAt) + "\n")
 
-	// Horizontal rule inside the content area.
-	ruleWidth := m.width
+	// Horizontal rule inside the content area, capped at effective content width.
+	ruleWidth := cWidth
 	if ruleWidth < 1 {
 		ruleWidth = 40
 	}
-	content.WriteString(mutedStyle.Render(strings.Repeat("─", ruleWidth)) + "\n")
-	metaLines++ // rule counts as one content line
-
-	_ = metaLines // used only for documentation; viewport height is set in Update
+	content.WriteString(strings.Repeat(" ", cOffset) + mutedStyle.Render(strings.Repeat("─", ruleWidth)) + "\n")
 
 	content.WriteString(m.vp.View())
 
 	if m.confirmDelete {
-		content.WriteString("\n" + strings.Repeat(" ", leftPad) + confirmStyle.Render("Delete this observation? y/n") + "\n")
+		content.WriteString("\n" + metaIndent + confirmStyle.Render("Delete this observation? y/n") + "\n")
 	}
 
 	// ── status and footer ────────────────────────────────────────────────────
@@ -1357,8 +1407,8 @@ func (m Model) viewDetail() string {
 	if m.err != nil {
 		statusText = "error: " + m.err.Error()
 	}
-	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusText)
-	footerLine := strings.Repeat(" ", leftPad) + m.renderFooter()
+	statusLine := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusText)
+	footerLine := strings.Repeat(" ", cOffset+leftPad) + m.renderFooter()
 
 	// ── compose full-height layout ───────────────────────────────────────────
 	contentRows := m.height - headerRows - statusRows
