@@ -24,6 +24,7 @@ package tui
 // 19. TestConfig_RenderSmoke_Wide_200x55 — centered exact-fill at 200x55.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -395,6 +396,82 @@ func TestConfig_RenderSmoke_Wide_200x55(t *testing.T) {
 	status := stripAnsiCodes(lines[len(lines)-2])
 	if !strings.Contains(strings.ToUpper(status), "CONFIG") {
 		t.Errorf("status bar should mention CONFIG; got: %q", status)
+	}
+}
+
+// ─── Setting-save error surface ──────────────────────────────────────────────
+
+// TestConfig_SaveSettingErrorStoredInModel verifies that when saveConfigSetting
+// produces a configSaveSettingMsg with a non-nil err, the error is stored in
+// the model so the view can render it.
+func TestConfig_SaveSettingErrorStoredInModel(t *testing.T) {
+	m := newConfigModel()
+	saveErr := fmt.Errorf("disk full")
+
+	next, _ := m.Update(configSaveSettingMsg{err: saveErr})
+	m = next.(Model)
+
+	if m.configSaveErr == nil {
+		t.Fatal("configSaveErr should be set after configSaveSettingMsg with non-nil err")
+	}
+	if m.configSaveErr.Error() != "disk full" {
+		t.Errorf("configSaveErr = %q, want %q", m.configSaveErr.Error(), "disk full")
+	}
+}
+
+// TestConfig_SaveSettingErrorRenderedAsDanger verifies that when configSaveErr
+// is set, the config view renders a SETTING NOT SAVED danger message.
+func TestConfig_SaveSettingErrorRenderedAsDanger(t *testing.T) {
+	m := newConfigModel()
+	m = setSize(m, 80, 24)
+	m.configSaveErr = fmt.Errorf("permission denied")
+
+	out := m.View()
+	plain := stripAnsiCodes(out)
+	if !strings.Contains(strings.ToUpper(plain), "SETTING NOT SAVED") {
+		t.Errorf("View() should show SETTING NOT SAVED when configSaveErr is set; plain:\n%s", plain)
+	}
+}
+
+// TestConfig_SaveSettingSuccessClearsPreviousError verifies that a successful
+// save (err=nil) clears any previously stored configSaveErr.
+func TestConfig_SaveSettingSuccessClearsPreviousError(t *testing.T) {
+	m := newConfigModel()
+	m.configSaveErr = fmt.Errorf("old error")
+
+	next, _ := m.Update(configSaveSettingMsg{err: nil})
+	m = next.(Model)
+
+	if m.configSaveErr != nil {
+		t.Errorf("configSaveErr should be nil after successful save, got %v", m.configSaveErr)
+	}
+}
+
+// TestConfig_SaveFnFailureProducesErrorMsg verifies that when saveFn is injected
+// and returns an error, the resulting configSaveSettingMsg carries that error.
+func TestConfig_SaveFnFailureProducesErrorMsg(t *testing.T) {
+	m := newConfigModel()
+	m.configCursor = configRowEmbeddings
+	m.configEmbeddingsEnabled = false
+	injectedErr := fmt.Errorf("injected save failure")
+	m.saveFn = func(key, value string) error {
+		return injectedErr
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("toggling EMBEDDINGS should return a command")
+	}
+	msg := cmd()
+	saveMsg, ok := msg.(configSaveSettingMsg)
+	if !ok {
+		t.Fatalf("expected configSaveSettingMsg, got %T", msg)
+	}
+	if saveMsg.err == nil {
+		t.Fatal("configSaveSettingMsg should carry the error from saveFn")
+	}
+	if saveMsg.err.Error() != "injected save failure" {
+		t.Errorf("err = %q, want %q", saveMsg.err.Error(), "injected save failure")
 	}
 }
 

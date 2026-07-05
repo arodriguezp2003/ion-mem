@@ -44,6 +44,10 @@ type Server struct {
 	defaultProj string
 	profile     string
 
+	// endSessionFn is the function used to end a session. Defaults to
+	// s.store.EndSession. Tests may inject a function that returns an error.
+	endSessionFn func(ctx context.Context, sessionID, summary string) error
+
 	// Project cache: resolve result re-validated after projectCacheTTL so
 	// detection-input changes on disk are eventually picked up.
 	cacheMu       sync.Mutex
@@ -81,6 +85,14 @@ func WithDetectFunc(fn func(cwd string) (project.DetectionResult, error)) Option
 	}
 }
 
+// WithEndSessionFn replaces the default store.EndSession call in
+// handleSessionSummary. Used in tests to inject controlled failures.
+func WithEndSessionFn(fn func(ctx context.Context, sessionID, summary string) error) Option {
+	return func(s *Server) {
+		s.endSessionFn = fn
+	}
+}
+
 // New creates a new Server wrapping the given Store with the supplied options.
 func New(st *store.Store, opts ...Option) *Server {
 	s := &Server{
@@ -88,6 +100,10 @@ func New(st *store.Store, opts ...Option) *Server {
 		detect:         project.DetectFull,
 		profile:        "agent",
 		sessionsByProj: make(map[string]string),
+	}
+	// Default endSessionFn delegates to the store.
+	s.endSessionFn = func(ctx context.Context, sessionID, summary string) error {
+		return st.EndSession(ctx, sessionID, summary)
 	}
 	for _, o := range opts {
 		o(s)

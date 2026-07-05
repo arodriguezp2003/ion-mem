@@ -1,6 +1,8 @@
 package handlers_test
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -216,6 +218,69 @@ func TestSessionEnd_StatusErrorNotFound(t *testing.T) {
 	}
 	if env["error_code"] != "not_found" {
 		t.Errorf("error_code = %v, want %q", env["error_code"], "not_found")
+	}
+}
+
+// --- session_ended field in ion_session_summary ---
+
+// TestSessionSummary_with_session_id_returns_session_ended_true verifies that
+// the response includes session_ended:true when the session is successfully ended.
+func TestSessionSummary_with_session_id_returns_session_ended_true(t *testing.T) {
+	st := mustStore(t)
+	_, ts := mustTestServer(t, st, mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+		return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+	}))
+
+	ctx := contextBG(t)
+	_, _ = st.CreateSession(ctx, store.CreateSessionParams{ID: "se-ok-sess", Project: "myproj"})
+
+	res := callTool(t, ts, "ion_session_summary", map[string]any{
+		"session_id": "se-ok-sess",
+		"summary":    "done",
+	})
+	env := decodeText(t, res)
+
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q", env["status"], "ok")
+	}
+	if env["session_ended"] != true {
+		t.Errorf("session_ended = %v, want true when session ends successfully", env["session_ended"])
+	}
+}
+
+// TestSessionSummary_session_end_failure_still_saves_observation verifies that
+// when EndSession fails (injected error), the observation IS still saved
+// (status: ok), session_ended is false, and the result text mentions the failure.
+func TestSessionSummary_session_end_failure_still_saves_observation(t *testing.T) {
+	st := mustStore(t)
+	endErr := fmt.Errorf("synthetic end failure")
+	_, ts := mustTestServer(t, st,
+		mcp.WithDetectFunc(func(_ string) (project.DetectionResult, error) {
+			return project.DetectionResult{Project: "myproj", Source: "git_root", Path: "/repo"}, nil
+		}),
+		mcp.WithEndSessionFn(func(_ context.Context, _, _ string) error {
+			return endErr
+		}),
+	)
+
+	res := callTool(t, ts, "ion_session_summary", map[string]any{
+		"session_id": "inject-err-sess",
+		"summary":    "done",
+	})
+	env := decodeText(t, res)
+
+	// Observation must be saved — status ok.
+	if env["status"] != "ok" {
+		t.Errorf("status = %v, want %q (observation saved despite end failure)", env["status"], "ok")
+	}
+	// session_ended must be false.
+	if env["session_ended"] != false {
+		t.Errorf("session_ended = %v, want false when end fails", env["session_ended"])
+	}
+	// Result text must mention the failure.
+	result, _ := env["result"].(string)
+	if !strings.Contains(result, "session end failed") {
+		t.Errorf("result = %q, want to contain 'session end failed'", result)
 	}
 }
 

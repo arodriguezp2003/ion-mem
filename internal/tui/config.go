@@ -283,16 +283,26 @@ func (m Model) fetchConfigSettings() tea.Cmd {
 	}
 }
 
-// saveConfigSetting persists a single key/value pair. Returns a fire-and-forget
-// command; the configSaveSettingMsg it produces is handled by Update silently.
+// saveConfigSetting persists a single key/value pair. Returns a command that
+// produces a configSaveSettingMsg carrying any error so the view can surface it.
 func (m Model) saveConfigSetting(key, value string) tea.Cmd {
-	if m.store == nil || key == "" {
+	if key == "" {
+		return func() tea.Msg { return configSaveSettingMsg{} }
+	}
+	// Allow test injection via saveFn.
+	if m.saveFn != nil {
+		fn := m.saveFn
+		return func() tea.Msg {
+			return configSaveSettingMsg{err: fn(key, value)}
+		}
+	}
+	if m.store == nil {
 		return func() tea.Msg { return configSaveSettingMsg{} }
 	}
 	st := m.store
 	return func() tea.Msg {
-		_ = st.SetSetting(context.Background(), key, value)
-		return configSaveSettingMsg{}
+		err := st.SetSetting(context.Background(), key, value)
+		return configSaveSettingMsg{err: err}
 	}
 }
 
@@ -819,6 +829,14 @@ func (m Model) viewConfigPage() string {
 			resultLine = configDangerStyle.Render(m.configRegenResult)
 		}
 		content.WriteString("\n" + rowIndent + resultLine + "\n")
+	}
+
+	// ── setting-save error ───────────────────────────────────────────────────
+	// Shown when the last st.SetSetting call returned an error. Clears on
+	// subsequent successful save.
+	if m.configSaveErr != nil {
+		errLine := configDangerStyle.Render("SETTING NOT SAVED — " + m.configSaveErr.Error())
+		content.WriteString("\n" + rowIndent + errLine + "\n")
 	}
 
 	// ── status and footer ────────────────────────────────────────────────────

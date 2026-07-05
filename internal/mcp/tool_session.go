@@ -162,14 +162,23 @@ func handleSessionSummary(s *Server) toolHandler {
 		}
 
 		// Critical side-effect: when a session_id was supplied, also end the session.
+		// The observation is already saved; a failure here must not discard it.
+		// session_ended reports the outcome so callers can detect silent losses.
+		sessionEnded := false
+		resultMsg := "session summary saved"
 		if sessionIDArg != "" {
-			_ = s.store.EndSession(ctx, sessionID, summary)
+			if endErr := s.endSessionFn(ctx, sessionID, summary); endErr != nil {
+				resultMsg = "summary saved; session end failed: " + endErr.Error()
+			} else {
+				sessionEnded = true
+			}
 		}
 
-		raw := Build(det, "session summary saved", map[string]any{
+		raw := Build(det, resultMsg, map[string]any{
 			"session_id":     sessionID,
 			"observation_id": obs.ID,
 			"sync_id":        obs.SyncID,
+			"session_ended":  sessionEnded,
 		})
 		return textResult(raw), nil
 	}

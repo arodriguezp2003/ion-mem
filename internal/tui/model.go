@@ -102,8 +102,11 @@ type configSettingsLoadedMsg struct {
 	model             string
 }
 
-// configSaveSettingMsg signals that a setting was persisted (fire-and-forget).
-type configSaveSettingMsg struct{}
+// configSaveSettingMsg signals the result of a setting persistence attempt.
+// err is non-nil when the store write failed.
+type configSaveSettingMsg struct {
+	err error
+}
 
 // configProbeResultMsg carries the result of a TEST CONNECTION probe.
 type configProbeResultMsg struct {
@@ -370,6 +373,16 @@ type Model struct {
 	configEditOrig          string // original value before editing (for Esc cancel)
 	configInput             textinput.Model
 
+	// configSaveErr holds the most recent error from saveConfigSetting.
+	// Non-nil when the last setting persistence attempt failed. Cleared on
+	// a subsequent successful save.
+	configSaveErr error
+
+	// saveFn is the injectable setting-persistence function. In production it
+	// is nil and saveConfigSetting falls back to st.SetSetting. In tests it can
+	// be replaced with a stub that returns a controlled error.
+	saveFn func(key, value string) error
+
 	// probeFn is the function used to run the Ollama connection test. In
 	// production it creates an embed.Client and calls Ping/HasModel/ProbeEmbed.
 	// In unit tests it is replaced with a stub that returns a fake result
@@ -628,7 +641,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case configSaveSettingMsg:
-		// fire-and-forget — no state change required
+		// Store the error (nil on success, non-nil on failure) so the config
+		// view can render a danger message when the write failed.
+		m.configSaveErr = msg.err
 		return m, nil
 
 	case configProbeResultMsg:
