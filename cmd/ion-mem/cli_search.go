@@ -52,7 +52,16 @@ func parseSearchFlags(args []string, homeDir func() (string, error)) (searchConf
 		return searchConfig{}, fmt.Errorf("ion-mem search: %w", err)
 	}
 
-	// Remaining positional arguments form the query.
+	// Remaining positional arguments form the query. Go's flag package stops
+	// parsing at the first positional argument, so anything that LOOKS like a
+	// flag after the query would be silently swallowed into the query text —
+	// reject it loudly instead.
+	for _, a := range fs.Args() {
+		if strings.HasPrefix(a, "-") {
+			return searchConfig{}, fmt.Errorf(
+				"ion-mem search: flag %q found after the query — place flags BEFORE the query (ion-mem search --limit 5 \"your query\")", a)
+		}
+	}
 	query := strings.Join(fs.Args(), " ")
 	query = strings.TrimSpace(query)
 	if query == "" {

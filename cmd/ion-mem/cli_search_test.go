@@ -207,3 +207,16 @@ func TestRouteCommand_SearchRoutes(t *testing.T) {
 		t.Fatalf("routeCommand search: %v", err)
 	}
 }
+
+// TestParseSearchFlags_FlagsAfterQueryRejected verifies that trailing flags
+// (which Go's flag package would silently treat as query words) are rejected
+// with a helpful error instead of being ignored.
+func TestParseSearchFlags_FlagsAfterQueryRejected(t *testing.T) {
+	_, err := parseSearchFlags([]string{"my query", "--limit", "3"}, fakeHome)
+	if err == nil {
+		t.Fatal("expected error when flags appear after the query")
+	}
+	if !strings.Contains(err.Error(), "BEFORE the query") {
+		t.Errorf("error %q should explain flag placement", err.Error())
+	}
+}
