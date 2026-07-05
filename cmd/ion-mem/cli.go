@@ -7,6 +7,7 @@
 //	ion-mem session-end   --id=X [--summary=Y] [--data-dir=...]
 //	ion-mem context       --project=X [--scope=Y] [--data-dir=...]
 //	ion-mem save-prompt   --session-id=X --content=Y [--project=Z] [--data-dir=...]
+//	ion-mem search        <query> [--project=...] [--all-projects] [--limit=10] [--type=...] [--data-dir=...] [--json]
 //	ion-mem version
 //
 // The CLI is intentionally thin: the mcp subcommand opens the local store
@@ -130,6 +131,7 @@ Commands:
   session-end          Mark a session as ended.
   context              Print a markdown context summary for a project.
   save-prompt          Record a user prompt for a session.
+  search               One-shot search: ion-mem search <query> [--project=...] [--json].
   status               One-shot health snapshot: stats, recent items, alerts.
   eval                 Run search quality evaluation against a golden query set.
   backfill-embeddings  Embed all observations that lack a vector row (requires Ollama).
@@ -179,6 +181,8 @@ func routeCommand(argv []string, out io.Writer) error {
 		return runContext(argv[2:], out)
 	case "save-prompt":
 		return runSavePrompt(argv[2:])
+	case "search":
+		return runSearch(argv[2:], out, os.Stderr)
 	case "status":
 		return runStatus(argv[2:], out)
 	case "eval":
