@@ -207,7 +207,33 @@ const (
 	// rightPad is the right-side padding kept between right-aligned content and
 	// the terminal edge.
 	rightPad = 2
+	// contentMaxWidth is the maximum column width for the content block.
+	// On terminals wider than this, the content is horizontally centred so
+	// columns don't scatter across an excessively wide screen.
+	contentMaxWidth = 100
 )
+
+// contentOffset returns the number of extra leading spaces to prepend to
+// every content row when the terminal is wider than contentMaxWidth.
+// On narrow terminals (width ≤ contentMaxWidth) it returns 0, preserving the
+// existing behaviour.
+func contentOffset(termWidth int) int {
+	if termWidth <= contentMaxWidth {
+		return 0
+	}
+	offset := (termWidth - contentMaxWidth) / 2
+	return offset
+}
+
+// effectiveWidth returns the column budget that content rows should fill.
+// It is the minimum of the terminal width and contentMaxWidth, so layout
+// calculations cap at contentMaxWidth on wide screens.
+func effectiveWidth(termWidth int) int {
+	if termWidth > contentMaxWidth {
+		return contentMaxWidth
+	}
+	return termWidth
+}
 
 // ─── model ────────────────────────────────────────────────────────────────────
 
@@ -693,37 +719,50 @@ func (m Model) renderHeader(breadcrumb string) string {
 func (m Model) renderLogoHero(version string) string {
 	var sb strings.Builder
 
-	// Determine centering offset.
-	w := m.width
+	// Use the effective width for centering so the logo aligns with the rest of
+	// the content block on wide terminals.
+	w := effectiveWidth(m.width)
 	if w < 1 {
 		w = 80
 	}
+	// The centering offset shifts the whole block right on extra-wide terminals.
+	offset := contentOffset(m.width)
 
 	// Render each art row with its gradient color.
 	for i, row := range logoRows {
+		// Empty art rows are rendered as plain blank lines — no ANSI codes —
+		// to avoid styled-blank artifacts in real terminals where some emulators
+		// paint the rest of the line in the foreground colour.
+		if row == "" {
+			sb.WriteString("\n")
+			continue
+		}
 		colorIdx := i
 		if colorIdx >= len(logoGradient) {
 			colorIdx = len(logoGradient) - 1
 		}
 		col := lipgloss.Color(logoGradient[colorIdx])
 		styled := lipgloss.NewStyle().Foreground(col).Render(row)
-		// Center: compute raw width of the art row.
+		// Center within the effective content block.
 		rawWidth := lipgloss.Width(styled)
 		pad := (w - rawWidth) / 2
 		if pad < 0 {
 			pad = 0
 		}
-		sb.WriteString(strings.Repeat(" ", pad) + styled + "\n")
+		sb.WriteString(strings.Repeat(" ", offset+pad) + styled + "\n")
 	}
 
-	// Tagline line (1 line).
+	// Tagline line (1 line) — centred within the content block.
 	tagline := dimStyle.Render("Persistent memory for AI coding agents — " + version)
 	tagRaw := lipgloss.Width(tagline)
 	tagPad := (w - tagRaw) / 2
 	if tagPad < 0 {
 		tagPad = 0
 	}
-	sb.WriteString(strings.Repeat(" ", tagPad) + tagline + "\n")
+	sb.WriteString(strings.Repeat(" ", offset+tagPad) + tagline + "\n")
+
+	// Blank spacer between tagline and the first list row (Bug 3 fix).
+	sb.WriteString("\n")
 
 	return sb.String()
 }
@@ -839,6 +878,14 @@ func (m Model) viewProjects() string {
 	header := m.renderHeader("Projects")
 	separator := m.renderSeparator()
 
+	// Wide-terminal layout helpers: content is capped at contentMaxWidth and
+	// centred horizontally when the terminal is wider.
+	cOffset := contentOffset(m.width) // extra left indent for centering
+	cWidth := effectiveWidth(m.width) // column budget for content rows
+	if cWidth < 40 {
+		cWidth = 40
+	}
+
 	// ── content rows ────────────────────────────────────────────────────────
 	var content strings.Builder
 
@@ -852,27 +899,25 @@ func (m Model) viewProjects() string {
 	// accent search bar at the top of the content area (above the project list).
 	if m.globalSearching {
 		// Render input in the same styled box as the observations search bar.
-		w := m.width
-		if w < 20 {
-			w = 20
-		}
-		innerW := w - 6
+		innerW := cWidth - 6
 		if innerW < 5 {
 			innerW = 5
 		}
 		prompt := headerStyle.Render("/") + " " + m.searchInput.View()
 		box := searchBarActiveStyle.Width(innerW).Render(prompt)
-		content.WriteString(box + "\n")
+		content.WriteString(strings.Repeat(" ", cOffset) + box + "\n")
 	}
+
+	rowIndent := strings.Repeat(" ", cOffset+leftPad) // indent for ordinary content rows
 
 	if len(m.projects) == 0 {
 		msg := dimStyle.Render("No projects yet — memories will appear as agents save them.")
 		if m.width > 0 {
-			msg = lipgloss.NewStyle().Width(m.width).Align(lipgloss.Center).Foreground(defaultTheme.dim).Render(
+			msg = lipgloss.NewStyle().Width(cWidth).Align(lipgloss.Center).Foreground(defaultTheme.dim).Render(
 				"No projects yet — memories will appear as agents save them.",
 			)
 		}
-		content.WriteString(msg + "\n")
+		content.WriteString(strings.Repeat(" ", cOffset) + msg + "\n")
 	} else {
 		visible := m.listVisibleHeight(false, logo)
 		offset := m.projOffset
@@ -880,7 +925,7 @@ func (m Model) viewProjects() string {
 
 		showUp, showDown := overflowMarkers(offset, visible, total)
 		if showUp {
-			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↑ more") + "\n")
+			content.WriteString(rowIndent + mutedStyle.Render("↑ more") + "\n")
 		}
 
 		end := offset + visible
@@ -898,22 +943,19 @@ func (m Model) viewProjects() string {
 			counts := fmt.Sprintf("%4d obs  %3d sessions", p.ObservationCount, p.SessionCount)
 			activityStr := humanizeTime(p.LastActivity)
 
-			// Right-align the activity column: pad so it ends at width-rightPad.
+			// Right-align the activity column within the effective content width.
 			var row string
 			if m.width > 0 {
-				left := strings.Repeat(" ", leftPad)
+				left := strings.Repeat(" ", cOffset+leftPad)
 				if i == m.projectCursor {
-					left = selectedRowStyle.Render("▌") + " "
+					left = strings.Repeat(" ", cOffset) + selectedRowStyle.Render("▌") + " "
 				}
-				// Build left portion without styling widths.
 				nameFmt := fmt.Sprintf("%-*s", nameWidth, name)
 				countsFmt := counts
-				// Compute gap for right-aligned activity.
-				leftRaw := leftPad + nameWidth + 2 + len(counts) + 2 // approx raw chars
-				if i == m.projectCursor {
-					leftRaw = leftPad + nameWidth + 2 + len(counts) + 2
-				}
-				gap := m.width - leftRaw - activityWidth - rightPad
+				// Gap fills the space between counts and the right-aligned activity
+				// column, calculated against the effective content width.
+				leftRaw := leftPad + nameWidth + 2 + len(counts) + 2
+				gap := cWidth - leftRaw - activityWidth - rightPad
 				if gap < 1 {
 					gap = 1
 				}
@@ -941,7 +983,7 @@ func (m Model) viewProjects() string {
 		}
 
 		if showDown {
-			content.WriteString(strings.Repeat(" ", leftPad) + mutedStyle.Render("↓ more") + "\n")
+			content.WriteString(rowIndent + mutedStyle.Render("↓ more") + "\n")
 		}
 	}
 
@@ -954,7 +996,7 @@ func (m Model) viewProjects() string {
 	if m.err != nil {
 		statusLeft = "error: " + m.err.Error()
 	}
-	statusLine := strings.Repeat(" ", leftPad) + statusBarStyle.Render(statusLeft)
+	statusLine := strings.Repeat(" ", cOffset+leftPad) + statusBarStyle.Render(statusLeft)
 
 	var footerHints []key.Binding
 	if m.globalSearching {
@@ -962,7 +1004,7 @@ func (m Model) viewProjects() string {
 	} else {
 		footerHints = keys.ShortHelp()
 	}
-	footerLine := strings.Repeat(" ", leftPad) + mutedStyle.Render(m.help.ShortHelpView(footerHints))
+	footerLine := strings.Repeat(" ", cOffset+leftPad) + mutedStyle.Render(m.help.ShortHelpView(footerHints))
 
 	// ── compose full-height layout ───────────────────────────────────────────
 	// Content area height = terminal height − header − separator − status − footer.

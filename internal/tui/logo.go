@@ -14,9 +14,9 @@ var logoRows = [7]string{
 }
 
 // logoHeight is the number of rows the logo occupies when rendered, including
-// the tagline line that follows it.
-// 7 art rows + 1 tagline line = 8 total lines consumed in the content area.
-const logoHeight = 8
+// the tagline line and the blank spacer below it.
+// 7 art rows + 1 tagline line + 1 blank spacer = 9 total lines consumed in the content area.
+const logoHeight = 9
 
 // logoMinTermHeight is the minimum terminal height at which the logo is shown.
 // Below this threshold the compact one-line brand header in the chrome bar is
