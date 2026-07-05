@@ -57,5 +57,5 @@ func runDash(args []string) error {
 	}
 	defer st.Close()
 
-	return tui.Run(st)
+	return tui.RunWithOptions(st, tui.Options{Version: resolvedVersion()})
 }
