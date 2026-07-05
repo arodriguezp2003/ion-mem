@@ -1,0 +1,264 @@
+# Synthetic evaluation corpus for ion-mem search quality tests.
+# All content is fictional. No real user data.
+# Designed to cover: title-term docs, content-term docs, near-duplicate
+# fresh/stale pairs, kebab-case identifiers, topic_key hits, long content
+# with a key term deep inside, distractors, and semantic-gap pairs.
+
+- title: "auth-service architecture decision"
+  content: "We decided to build the auth-service as a stateless JWT issuer. All tokens are short-lived and verified at the gateway."
+  type: "architecture"
+  topic_key: "architecture/auth-service"
+  age_days: 5
+
+- title: "rate-limiter design notes"
+  content: "The rate-limiter uses a sliding window algorithm with Redis as the backing store. Limits are configurable per endpoint."
+  type: "decision"
+  topic_key: "sdd/rate-limiter/design"
+  age_days: 10
+
+- title: "database migration strategy"
+  content: "All schema changes go through numbered migration files. We run migrations automatically on startup using the migrate function."
+  type: "decision"
+  topic_key: ""
+  age_days: 7
+
+- title: "database connection pooling"
+  content: "We cap at one open connection with WAL mode and busy_timeout=5000. This prevents contention in single-process deployments."
+  type: "decision"
+  topic_key: ""
+  age_days: 3
+
+- title: "JWT login flow with refresh tokens"
+  content: "Login endpoint issues a short-lived access token and a long-lived refresh token. Refresh tokens are stored hashed in the database."
+  type: "pattern"
+  topic_key: "architecture/jwt-auth"
+  age_days: 14
+
+- title: "cache invalidation approach"
+  content: "We invalidate cache entries on write, not on read. This keeps reads fast at the cost of occasional cache misses on burst writes."
+  type: "decision"
+  topic_key: ""
+  age_days: 20
+
+- title: "search ranking weights"
+  content: "Title gets weight 8, topic_key gets weight 6, type gets weight 3, tool_name gets weight 2, content and project get weight 1. This biases toward exact title and structured-address matches."
+  type: "decision"
+  topic_key: "architecture/search-weights"
+  age_days: 2
+
+- title: "search recency decay"
+  content: "Recency decay uses a 30-day half-life. A result 30 days old is half as relevant as a fresh one with the same BM25 score."
+  type: "decision"
+  topic_key: "architecture/search-decay"
+  age_days: 1
+
+# Near-duplicate recency pair: same topic, one fresh one stale
+- title: "error handling convention"
+  content: "All errors are wrapped with fmt.Errorf and a context prefix. Sentinel errors use errors.Is for comparison. We never swallow errors silently."
+  type: "pattern"
+  topic_key: ""
+  age_days: 2
+
+- title: "error handling convention"
+  content: "All errors are wrapped with fmt.Errorf and a context prefix. Sentinel errors use errors.Is for comparison. We never swallow errors silently."
+  type: "pattern"
+  topic_key: ""
+  age_days: 95
+
+# Another recency pair: commit message style
+- title: "commit message style guide"
+  content: "We use Conventional Commits. Format is type(scope): description. Types are feat, fix, chore, docs, refactor, test. No period at end."
+  type: "decision"
+  topic_key: ""
+  age_days: 4
+
+- title: "commit message style guide"
+  content: "We use Conventional Commits. Format is type(scope): description. Types are feat, fix, chore, docs, refactor, test. No period at end."
+  type: "decision"
+  topic_key: ""
+  age_days: 120
+
+# Long content with a key term deep inside (snippet case)
+- title: "deployment checklist"
+  content: "Step 1: ensure all tests pass. Step 2: update the changelog. Step 3: tag the release. Step 4: build the binary. Step 5: push the Docker image. Step 6: run the smoke test against staging. Step 7: enable the feature flag. Step 8: monitor error rates. Step 9: announce in the team channel. Step 10: the rollback procedure requires reverting the config and restarting the service."
+  type: "pattern"
+  topic_key: ""
+  age_days: 8
+
+- title: "rollback procedure"
+  content: "To rollback a deployment: revert the last commit, redeploy the previous tag, flush caches, and verify health endpoints."
+  type: "pattern"
+  topic_key: ""
+  age_days: 12
+
+- title: "observability stack"
+  content: "We use Prometheus for metrics, Loki for logs, and Grafana for dashboards. Alerts fire to Slack via Alertmanager."
+  type: "decision"
+  topic_key: ""
+  age_days: 30
+
+- title: "structured logging format"
+  content: "All log entries are JSON with fields: timestamp, level, msg, service, trace_id. We use zerolog for low-allocation logging."
+  type: "pattern"
+  topic_key: ""
+  age_days: 15
+
+# topic_key hit
+- title: "local store mvp design"
+  content: "The MVP stores all data in a single SQLite file. FTS5 virtual table provides full-text search. No network dependency."
+  type: "architecture"
+  topic_key: "sdd/local-store-mvp/design"
+  age_days: 45
+
+# Distractor: similar vocabulary to auth, wrong topic
+- title: "API key rotation policy"
+  content: "Service API keys rotate every 90 days. Rotation is automated via the key-management-service. Old keys remain valid for 7 days during rollover."
+  type: "decision"
+  topic_key: ""
+  age_days: 18
+
+# Distractor: similar vocabulary to search, wrong topic
+- title: "full-text indexing strategy"
+  content: "We maintain a secondary FTS5 table updated by triggers on insert, update, and delete. The tokenizer is unicode61."
+  type: "architecture"
+  topic_key: ""
+  age_days: 22
+
+# Kebab-case identifier in content
+- title: "service mesh configuration"
+  content: "All services communicate through the service-mesh. Routing rules live in the api-gateway config. The rate-limiter sidecar enforces per-service quotas."
+  type: "architecture"
+  topic_key: ""
+  age_days: 9
+
+# Semantic-gap docs (no lexical overlap with the query that targets them)
+- title: "token refresh implementation"
+  content: "RefreshToken endpoint validates the hashed token, issues a new access token, and rotates the refresh token to prevent replay attacks."
+  type: "pattern"
+  topic_key: ""
+  age_days: 6
+
+- title: "concurrency safety approach"
+  content: "The store uses a single connection with WAL mode. Goroutines compete for the connection through database/sql pool semantics. Busy timeout prevents deadlocks."
+  type: "decision"
+  topic_key: ""
+  age_days: 11
+
+- title: "feature flag rollout"
+  content: "Feature flags are evaluated server-side per request. Rollout percentage is stored in the config table. Gradual rollout starts at 1%."
+  type: "decision"
+  topic_key: ""
+  age_days: 16
+
+- title: "index maintenance policy"
+  content: "We run VACUUM and ANALYZE on the SQLite database weekly during low-traffic windows. WAL checkpointing happens automatically."
+  type: "decision"
+  topic_key: ""
+  age_days: 25
+
+# Additional coverage: type-filter and scope-related
+- title: "session lifecycle management"
+  content: "Sessions are created on first agent call and closed by the session-end command. Stale sessions (>24h) generate health alerts."
+  type: "architecture"
+  topic_key: "architecture/session-lifecycle"
+  age_days: 3
+
+- title: "deduplication hash algorithm"
+  content: "Content is normalized (lowercase, collapsed whitespace) before SHA-256 hashing. The dedup key is the composite of hash, project, scope, type, and title."
+  type: "architecture"
+  topic_key: ""
+  age_days: 7
+
+# Semantic gap: query 'how do we authenticate users' has no lexical overlap
+# with 'JWT login flow with refresh tokens' but semantically they match.
+- title: "password reset flow"
+  content: "Users request a reset link. The link contains a signed token valid for 15 minutes. On click, the old password hash is replaced."
+  type: "pattern"
+  topic_key: ""
+  age_days: 33
+
+# Additional distractor with 'error' vocabulary
+- title: "error budget policy"
+  content: "Our SLO allows 0.1% error rate. When the error budget is exhausted, new features are frozen until reliability is restored."
+  type: "decision"
+  topic_key: ""
+  age_days: 40
+
+# For multi-term AND query coverage
+- title: "retry policy with exponential backoff"
+  content: "Failed HTTP calls are retried up to 3 times with exponential backoff starting at 100ms. Jitter is added to prevent thundering herd."
+  type: "pattern"
+  topic_key: ""
+  age_days: 5
+
+- title: "circuit breaker configuration"
+  content: "The circuit breaker opens after 5 consecutive failures. It stays open for 30 seconds before entering half-open state for probe requests."
+  type: "pattern"
+  topic_key: ""
+  age_days: 13
+
+# topic_key kebab coverage
+- title: "API versioning strategy"
+  content: "We version APIs with a URL prefix (/v1, /v2). Breaking changes require a new version. Old versions are supported for 6 months."
+  type: "decision"
+  topic_key: "architecture/api-versioning"
+  age_days: 28
+
+# Long-tail distractor
+- title: "developer onboarding guide"
+  content: "Clone the repo, run make setup, then make dev. The setup script installs dependencies, runs migrations, and seeds test data."
+  type: "pattern"
+  topic_key: ""
+  age_days: 60
+
+# Semantic gap target: query 'find something fast in many records'
+- title: "query optimization notes"
+  content: "We added composite indexes on (project, deleted_at) and (topic_key, project, scope) after profiling showed full-table scans on large datasets."
+  type: "decision"
+  topic_key: ""
+  age_days: 17
+
+# For recency tiebreak: same content, different ages — fresh should rank first
+- title: "release process documentation"
+  content: "Releases are tagged from main after all checks pass. The release binary is built by CI and uploaded to GitHub Releases."
+  type: "pattern"
+  topic_key: ""
+  age_days: 3
+
+- title: "release process documentation"
+  content: "Releases are tagged from main after all checks pass. The release binary is built by CI and uploaded to GitHub Releases."
+  type: "pattern"
+  topic_key: ""
+  age_days: 90
+
+# More exact-title match cases
+- title: "FTS5 tokenizer behavior"
+  content: "The unicode61 tokenizer splits on whitespace and punctuation including hyphens. This means kebab-case identifiers are indexed as individual tokens."
+  type: "discovery"
+  topic_key: ""
+  age_days: 19
+
+- title: "BM25 scoring explanation"
+  content: "BM25 is negative in SQLite: more negative means more relevant. We multiply by an exp decay factor so older results move toward zero."
+  type: "discovery"
+  topic_key: "architecture/bm25-scoring"
+  age_days: 4
+
+- title: "soft delete behavior"
+  content: "Deleted observations set deleted_at rather than removing the row. All queries filter on deleted_at IS NULL. FTS is updated by triggers."
+  type: "decision"
+  topic_key: ""
+  age_days: 8
+
+# Semantic gap: query 'how fast can we write data' → 'WAL mode performance'
+- title: "WAL mode performance characteristics"
+  content: "WAL mode allows concurrent reads during writes. Write throughput is higher than rollback journal mode. We set synchronous=NORMAL for a balance."
+  type: "discovery"
+  topic_key: ""
+  age_days: 24
+
+- title: "test isolation strategy"
+  content: "Each test creates a fresh SQLite database in t.TempDir(). No shared state between tests. Cleanup is registered via t.Cleanup."
+  type: "pattern"
+  topic_key: ""
+  age_days: 6
