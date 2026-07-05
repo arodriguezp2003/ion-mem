@@ -151,6 +151,8 @@ func (s *Store) AddObservation(ctx context.Context, params AddObservationParams)
 
 // topicKeyUpsert checks for an existing non-deleted row with the same
 // (project, scope, topic_key). If found, it updates it in place and returns it.
+// When content, title, or type actually changes, captures the BEFORE image in
+// observation_revisions within the same transaction.
 // Returns zero-value Observation (ID=0) when no existing row is found.
 func (s *Store) topicKeyUpsert(ctx context.Context, params AddObservationParams, scope, hash, now string) (Observation, error) {
 	var id int64
@@ -167,12 +169,31 @@ func (s *Store) topicKeyUpsert(ctx context.Context, params AddObservationParams,
 		return Observation{}, fmt.Errorf("store.AddObservation topicKey probe: %w", err)
 	}
 
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Observation{}, fmt.Errorf("store.AddObservation topicKey begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Read the current row inside the transaction so capture sees a consistent snapshot.
+	current, err := readCurrentObservation(ctx, tx, id)
+	if err != nil {
+		return Observation{}, fmt.Errorf("store.AddObservation topicKey read current: %w", err)
+	}
+
+	// Capture BEFORE image only when something actually changes.
+	if current.NormalizedHash != hash || current.Title != params.Title || current.Type != params.Type {
+		if err := captureRevision(ctx, tx, current, now); err != nil {
+			return Observation{}, err
+		}
+	}
+
 	var toolNameArg interface{}
 	if params.ToolName != "" {
 		toolNameArg = params.ToolName
 	}
 
-	_, err = s.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		UPDATE observations
 		SET type=?, title=?, content=?, tool_name=?, normalized_hash=?,
 		    revision_count=revision_count+1, last_seen_at=?, updated_at=?
@@ -181,6 +202,10 @@ func (s *Store) topicKeyUpsert(ctx context.Context, params AddObservationParams,
 	)
 	if err != nil {
 		return Observation{}, fmt.Errorf("store.AddObservation topicKey update: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Observation{}, fmt.Errorf("store.AddObservation topicKey commit: %w", err)
 	}
 
 	return s.getObservationByID(ctx, id)
@@ -281,21 +306,33 @@ func (s *Store) getObservationByID(ctx context.Context, id int64) (Observation, 
 
 // UpdateObservation applies a partial update to the observation with the given id.
 // Only non-nil fields in params are changed. updated_at is always set.
+// When title, content, or type actually changes, captures the BEFORE image in
+// observation_revisions within the same transaction.
 // Returns ErrObservationNotFound if the id does not exist.
 func (s *Store) UpdateObservation(ctx context.Context, id int64, params UpdateObservationParams) (Observation, error) {
-	// Check existence first.
-	var exists int
-	err := s.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM observations WHERE id=? AND deleted_at IS NULL", id,
-	).Scan(&exists)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Observation{}, fmt.Errorf("store.UpdateObservation existence check: %w", err)
+		return Observation{}, fmt.Errorf("store.UpdateObservation begin tx: %w", err)
 	}
-	if exists == 0 {
-		return Observation{}, ErrObservationNotFound
+	defer tx.Rollback() //nolint:errcheck
+
+	current, err := readCurrentObservation(ctx, tx, id)
+	if err != nil {
+		return Observation{}, err // ErrObservationNotFound propagates correctly
 	}
 
 	now := nowISO()
+
+	// Determine whether any content-affecting field actually changes.
+	willChangeContent := params.Content != nil && computeDedupHash(*params.Content) != current.NormalizedHash
+	willChangeTitle := params.Title != nil && *params.Title != current.Title
+	willChangeType := params.Type != nil && *params.Type != current.Type
+
+	if willChangeContent || willChangeTitle || willChangeType {
+		if err := captureRevision(ctx, tx, current, now); err != nil {
+			return Observation{}, err
+		}
+	}
 
 	// Build dynamic SET clause.
 	setClauses := []string{"updated_at=?"}
@@ -335,8 +372,12 @@ func (s *Store) UpdateObservation(ctx context.Context, id int64, params UpdateOb
 	}
 	query += " WHERE id=?"
 
-	if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return Observation{}, fmt.Errorf("store.UpdateObservation update: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Observation{}, fmt.Errorf("store.UpdateObservation commit: %w", err)
 	}
 
 	return s.getObservationByID(ctx, id)
