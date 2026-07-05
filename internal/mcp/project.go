@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
@@ -68,7 +69,11 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 
 	// (3) Per-call cwd arg (NOT cached — each cwd arg may differ).
 	if cwdArg != "" {
-		return s.detect(cwdArg)
+		det, err := s.detect(cwdArg)
+		if err != nil {
+			return project.DetectionResult{}, err
+		}
+		return s.applyPathMapping(cwdArg, det), nil
 	}
 
 	// (4) Default: detect from process cwd, cached with TTL re-validation.
@@ -89,6 +94,7 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 	if err != nil {
 		return project.DetectionResult{}, err
 	}
+	det = s.applyPathMapping(cwd, det)
 
 	s.cacheMu.Lock()
 	// Double-check after acquiring lock (another goroutine may have refreshed
@@ -101,4 +107,31 @@ func (s *Server) resolveProject(projectArg, cwdArg string) (project.DetectionRes
 	}
 	s.cacheMu.Unlock()
 	return det, nil
+}
+
+// applyPathMapping upgrades a dir_basename detection result to "path_mapping"
+// when the store has a known session for the given directory. Strong detection
+// sources (config, git_remote, git_root, git_child) are never overridden.
+//
+// The layering rationale: project detection (internal/project) is intentionally
+// FS-pure — it knows nothing about stored sessions. The MCP layer owns the
+// store and is the correct place to enrich detection results with historical
+// context. This keeps internal/project free of store dependencies.
+func (s *Server) applyPathMapping(dir string, det project.DetectionResult) project.DetectionResult {
+	if det.Source != "dir_basename" {
+		// Strong sources are never overridden.
+		return det
+	}
+	if s.store == nil {
+		return det
+	}
+	proj, ok, err := s.store.ProjectForDirectory(context.Background(), dir)
+	if err != nil || !ok {
+		return det
+	}
+	return project.DetectionResult{
+		Project: proj,
+		Source:  "path_mapping",
+		Path:    dir,
+	}
 }
