@@ -337,7 +337,10 @@ type Model struct {
 	width   int
 	height  int
 
-	view viewState
+	view         viewState
+	// previousView records the view state that opened the current detail view.
+	// Esc from detail restores this view so global-search context is preserved.
+	previousView viewState
 
 	// Projects view.
 	projects      []store.ProjectSummary
@@ -929,6 +932,7 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		obs := m.observations[m.obsCursor]
 		m.selectedObs = &obs
+		m.previousView = viewObservations
 		// Refresh viewport dimensions for the newly selected observation.
 		// Width is capped at effectiveWidth so content aligns with the centred block.
 		m.vp.Width = effectiveWidth(m.width)
@@ -977,6 +981,7 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		obs := m.observations[m.obsCursor]
 		m.selectedObs = &obs
 		m.selectedProject = obs.Project
+		m.previousView = viewGlobalSearch
 		// Refresh viewport dimensions for the newly selected observation.
 		m.vp.Width = effectiveWidth(m.width)
 		m.vp.Height = m.detailVPHeight()
@@ -990,7 +995,13 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyDetail(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Type == tea.KeyEsc:
-		m.view = viewObservations
+		// Return to the view that opened the detail. Default to viewObservations
+		// when previousView is zero value (backward compatibility).
+		if m.previousView == viewGlobalSearch {
+			m.view = viewGlobalSearch
+		} else {
+			m.view = viewObservations
+		}
 		m.selectedObs = nil
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == 'd':
 		if m.selectedObs != nil {
