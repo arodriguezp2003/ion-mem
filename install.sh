@@ -9,7 +9,7 @@
 #   3. Register this repo as a Claude Code marketplace via
 #      `claude plugin marketplace add`.
 #   4. Install the `ion-mem` plugin from that marketplace.
-#   5. Detect a coexisting engram install and surface the impact.
+#   5. Print next steps.
 # After running, restart Claude Code (or /reload-plugins) to pick everything up.
 #
 # A future SDD pass will replace this with a proper `ion-mem setup
@@ -291,20 +291,6 @@ echo
 if [ "$PATH_ALREADY_OK" -eq 0 ] && [ "$SKIP_PATH_EDIT" -eq 0 ] && [ -n "$SHELL_RC" ]; then
   echo "Reload PATH in this shell: source \"$SHELL_RC\""
   echo "(New shells will pick it up automatically.)"
-  echo
-fi
-
-# ─── 6. Coexistence check (engram via the actual plugin cache path) ────────
-
-ENGRAM_CACHE_DIR="$HOME/.claude/plugins/cache/engram"
-if [ -d "$ENGRAM_CACHE_DIR" ]; then
-  echo "⚠ engram plugin still installed at $ENGRAM_CACHE_DIR"
-  echo "  Both plugins ACTIVE → duplicated Memory Protocol injection, duplicated"
-  echo "  ToolSearch (27 tools), and potential double-saves to engram + ion-mem."
-  echo "  Disable (reversible, keeps engram's data + plugin files):"
-  echo "      claude plugin disable engram@engram"
-  echo "  Uninstall (full removal of plugin, keeps ~/.engram/ data):"
-  echo "      claude plugin uninstall engram@engram"
   echo
 fi
 

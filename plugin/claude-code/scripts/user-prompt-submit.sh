@@ -6,9 +6,8 @@ export PATH="$HOME/go/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 #
 # On the FIRST message of a session: injects a ToolSearch instruction so
 # Claude Code loads the ion-mem MCP tools (which are deferred by default),
-# AND saves the prompt to the store in the background. Divergence from
-# engram: engram does NOT capture the first prompt (only loads tools). We
-# capture every prompt so the session record is complete from message 1.
+# AND saves the prompt to the store in the background — every prompt is
+# captured so the session record is complete from message 1.
 #
 # On subsequent messages: saves the prompt to the store in the background
 # (best-effort, non-blocking) and outputs {} so Claude is not slowed down.
@@ -59,7 +58,7 @@ if [ ! -f "$STATE_FILE" ]; then
   # Touch state file immediately to prevent repeat injections.
   touch "$STATE_FILE" 2>/dev/null || true
 
-  # Capture the first prompt too (divergence from engram).
+  # Capture the first prompt too — the session record starts at message 1.
   save_prompt_bg
 
   printf '%s\n' '{"systemMessage":"CRITICAL FIRST ACTION — Execute this ToolSearch NOW before responding:\nselect:mcp__plugin_ion-mem_ion-mem__ion_save,mcp__plugin_ion-mem_ion-mem__ion_search,mcp__plugin_ion-mem_ion-mem__ion_context,mcp__plugin_ion-mem_ion-mem__ion_session_summary,mcp__plugin_ion-mem_ion-mem__ion_session_start,mcp__plugin_ion-mem_ion-mem__ion_session_end,mcp__plugin_ion-mem_ion-mem__ion_get_observation,mcp__plugin_ion-mem_ion-mem__ion_suggest_topic_key,mcp__plugin_ion-mem_ion-mem__ion_save_prompt,mcp__plugin_ion-mem_ion-mem__ion_update,mcp__plugin_ion-mem_ion-mem__ion_current_project,mcp__plugin_ion-mem_ion-mem__ion_timeline,mcp__plugin_ion-mem_ion-mem__ion_stats,mcp__plugin_ion-mem_ion-mem__ion_delete,mcp__plugin_ion-mem_ion-mem__ion_history,mcp__plugin_ion-mem_ion-mem__ion_undelete\n\nAfter loading tools, call ion_context to check for prior session history before responding."}'
