@@ -131,6 +131,7 @@ Commands:
   context        Print a markdown context summary for a project.
   save-prompt    Record a user prompt for a session.
   status         One-shot health snapshot: stats, recent items, alerts.
+  eval           Run search quality evaluation against a golden query set.
   version        Print the ion-mem version.
   help           Show this usage.
 
@@ -179,6 +180,8 @@ func routeCommand(argv []string, out io.Writer) error {
 		return runSavePrompt(argv[2:])
 	case "status":
 		return runStatus(argv[2:], out)
+	case "eval":
+		return runEval(argv[2:], out)
 	case "version":
 		if out != nil {
 			fmt.Fprintln(out, versionString())

@@ -47,8 +47,8 @@ type QueryResult struct {
 // Aggregate metrics (MeanPrecisionAt5, MeanMRR) are computed only over queries
 // where ExpectFail=false. ExpectFail queries appear in KnownGaps.
 type Report struct {
-	PerQuery          []QueryResult
-	KnownGaps         []QueryResult // ExpectFail queries
-	MeanPrecisionAt5  float64
-	MeanMRR           float64
+	PerQuery         []QueryResult
+	KnownGaps        []QueryResult // ExpectFail queries
+	MeanPrecisionAt5 float64
+	MeanMRR          float64
 }
