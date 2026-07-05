@@ -644,6 +644,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// across an excessively wide screen on wide terminals.
 		m.vp.Width = effectiveWidth(msg.Width)
 		m.vp.Height = m.detailVPHeight()
+		// Re-wrap content after resize so long lines don't clip at the new width.
+		// selectedObs is the source of truth for the raw content; re-wrap from it.
+		if m.selectedObs != nil {
+			m.vp.SetContent(wrapForViewport(renderObservationDetail(*m.selectedObs), m.vp.Width))
+		}
+		// Recompute revision viewport on resize as well.
+		m.revVP.Width = effectiveWidth(msg.Width)
+		m.revVP.Height = m.revVPHeight()
+		if m.selectedRevision != nil {
+			m.revVP.SetContent(wrapForViewport(m.selectedRevision.Content, m.revVP.Width))
+		}
 		// Reclaim window after resize so cursor stays visible.
 		m.projOffset = clampWindow(m.projectCursor, m.projOffset, m.listVisibleHeight(false, m.showLogo()), len(m.projects))
 		m.obsOffset = clampWindow(m.obsCursor, m.obsOffset, m.listVisibleHeight(true, false), len(m.observations))
@@ -722,7 +733,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil && msg.obs.ID != 0 {
 			// Refresh selectedObs with the server-side version.
 			m.selectedObs = &msg.obs
-			m.vp.SetContent(renderObservationDetail(msg.obs))
+			m.vp.SetContent(wrapForViewport(renderObservationDetail(msg.obs), m.vp.Width))
 		}
 		m.detailStatus = msg.statusMsg
 		m.detailStatusOK = msg.err == nil
@@ -1040,7 +1051,7 @@ func (m Model) handleKeyObservations(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Width is capped at effectiveWidth so content aligns with the centred block.
 		m.vp.Width = effectiveWidth(m.width)
 		m.vp.Height = m.detailVPHeight()
-		m.vp.SetContent(renderObservationDetail(obs))
+		m.vp.SetContent(wrapForViewport(renderObservationDetail(obs), m.vp.Width))
 		m.vp.GotoTop()
 		m.view = viewDetail
 	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == '/':
@@ -1095,7 +1106,7 @@ func (m Model) handleKeyGlobalSearch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Refresh viewport dimensions for the newly selected observation.
 		m.vp.Width = effectiveWidth(m.width)
 		m.vp.Height = m.detailVPHeight()
-		m.vp.SetContent(renderObservationDetail(obs))
+		m.vp.SetContent(wrapForViewport(renderObservationDetail(obs), m.vp.Width))
 		m.vp.GotoTop()
 		m.view = viewDetail
 	}

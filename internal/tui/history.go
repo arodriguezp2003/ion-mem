@@ -89,7 +89,7 @@ func (m Model) handleKeyHistory(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Set up the viewport to display the revision content.
 		m.revVP.Width = effectiveWidth(m.width)
 		m.revVP.Height = m.revVPHeight()
-		m.revVP.SetContent(rev.Content)
+		m.revVP.SetContent(wrapForViewport(rev.Content, m.revVP.Width))
 		m.revVP.GotoTop()
 		m.view = viewRevisionContent
 		return m, nil
