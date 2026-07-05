@@ -43,6 +43,11 @@ func handleUpdate(s *Server) toolHandler {
 			params.Content = &v
 		}
 		if v := req.GetString("type", ""); v != "" {
+			if !store.IsValidObservationType(v) {
+				raw := BuildError(det, CodeInvalidArgument,
+					"invalid type: "+v+"; valid types: decision, architecture, bugfix, discovery, config, preference, pattern, session_summary, manual")
+				return textResult(raw), nil
+			}
 			params.Type = &v
 		}
 		if v := req.GetString("topic_key", ""); v != "" {

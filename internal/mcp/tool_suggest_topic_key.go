@@ -61,7 +61,11 @@ func typeToFamily(obsType string) string {
 		return "config"
 	case "discovery":
 		return "discovery"
-	case "learning":
+	case "preference":
+		return "preference"
+	case "session_summary":
+		return "session"
+	case "manual", "learning":
 		return "learning"
 	default:
 		return "learning"

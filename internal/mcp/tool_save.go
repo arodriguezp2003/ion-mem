@@ -40,6 +40,16 @@ func handleSave(s *Server) toolHandler {
 		capturePrompt := req.GetBool("capture_prompt", true)
 		cwdArg := req.GetString("cwd", "")
 
+		// Validate type vocabulary. Empty type is allowed and defaults to "manual"
+		// (handled below when AddObservation is called). Non-empty unknown types
+		// are rejected immediately with invalid_argument.
+		if obsType != "manual" && obsType != "" && !store.IsValidObservationType(obsType) {
+			det, _ := s.resolveProject(projectArg, cwdArg)
+			raw := BuildError(det, CodeInvalidArgument,
+				"invalid type: "+obsType+"; valid types: decision, architecture, bugfix, discovery, config, preference, pattern, session_summary, manual")
+			return textResult(raw), nil
+		}
+
 		// Resolve project.
 		det, err := s.resolveProject(projectArg, cwdArg)
 		if err != nil {
