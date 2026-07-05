@@ -35,7 +35,7 @@ func DefaultClient(baseURL string) *Client {
 // Ping checks that the Ollama server is reachable by calling GET /api/tags.
 // A non-200 HTTP status or a network error is returned as an error.
 func (c *Client) Ping(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/tags", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/api/tags"), nil)
 	if err != nil {
 		return fmt.Errorf("embed: building ping request: %w", err)
 	}
@@ -61,7 +61,7 @@ type tagsResponse struct {
 // The comparison strips the ":latest" suffix so that "nomic-embed-text" matches
 // "nomic-embed-text:latest".
 func (c *Client) HasModel(ctx context.Context, model string) (bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/tags", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/api/tags"), nil)
 	if err != nil {
 		return false, fmt.Errorf("embed: building has-model request: %w", err)
 	}
@@ -70,6 +70,10 @@ func (c *Client) HasModel(ctx context.Context, model string) (bool, error) {
 		return false, fmt.Errorf("embed: has-model request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("embed: has-model: unexpected status %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -112,7 +116,7 @@ func (c *Client) ProbeEmbed(ctx context.Context, model string) (dims int, elapse
 		return 0, 0, fmt.Errorf("embed: encoding probe request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/embeddings",
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/api/embeddings"),
 		bytes.NewReader(reqBody))
 	if err != nil {
 		return 0, 0, fmt.Errorf("embed: building probe request: %w", err)
@@ -142,4 +146,10 @@ func (c *Client) ProbeEmbed(ctx context.Context, model string) (dims int, elapse
 	}
 
 	return len(er.Embedding), elapsed, nil
+}
+
+// endpoint joins path onto BaseURL, tolerating a trailing slash in the
+// user-configured base (e.g. "http://localhost:11434/").
+func (c *Client) endpoint(path string) string {
+	return strings.TrimRight(c.BaseURL, "/") + path
 }

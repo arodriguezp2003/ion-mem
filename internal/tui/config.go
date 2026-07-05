@@ -314,9 +314,9 @@ func (m Model) viewConfigPage() string {
 	}
 
 	// ── test result ───────────────────────────────────────────────────────────
-	if m.configTesting {
-		content.WriteString("\n" + rowIndent + configTestingStyle.Render("TESTING…") + "\n")
-	} else if m.configTestResult != "" {
+	// While a probe is in flight the TEST CONNECTION row itself shows TESTING…;
+	// this trailing block only renders a finished result.
+	if !m.configTesting && m.configTestResult != "" {
 		var resultLine string
 		if m.configTestOK {
 			resultLine = configOKStyle.Render("OLLAMA OK — " + strings.TrimPrefix(m.configTestResult, "OLLAMA OK — "))

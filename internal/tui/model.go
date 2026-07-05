@@ -545,9 +545,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case configProbeResultMsg:
-		m.configTesting = false
-		m.configTestOK = msg.ok
-		m.configTestResult = msg.info
+		// Ignore stale results that land after the user left the config view;
+		// re-entry resets the test state and a late message must not repopulate it.
+		if m.view == viewConfig {
+			m.configTesting = false
+			m.configTestOK = msg.ok
+			m.configTestResult = msg.info
+		}
 		return m, nil
 
 	case errMsg:
