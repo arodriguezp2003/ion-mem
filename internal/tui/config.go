@@ -267,20 +267,31 @@ func (m Model) handleConfigAction(spaceKey bool) (tea.Model, tea.Cmd) {
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
-// fetchConfigSettings loads all three settings from the store. Called on view
-// entry so the config view always reflects the persisted state.
+// fetchConfigSettings loads all three settings from the store and, when
+// embeddings are enabled, also fetches embedding coverage. Called on view entry.
 func (m Model) fetchConfigSettings() tea.Cmd {
 	if m.store == nil {
 		return nil
 	}
 	st := m.store
-	return func() tea.Msg {
+	settingsCmd := func() tea.Msg {
 		ctx := context.Background()
 		enabled := st.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
 		url := st.SettingOrDefault(ctx, store.SettingOllamaURL, "http://localhost:11434")
 		model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
 		return configSettingsLoadedMsg{embeddingsEnabled: enabled, ollamaURL: url, model: model}
 	}
+	coverageCmd := func() tea.Msg {
+		ctx := context.Background()
+		enabled := st.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
+		if !enabled {
+			return configCoverageLoadedMsg{}
+		}
+		model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+		have, total, _ := st.EmbeddingCoverage(ctx, "", model)
+		return configCoverageLoadedMsg{have: have, total: total}
+	}
+	return tea.Batch(settingsCmd, coverageCmd)
 }
 
 // saveConfigSetting persists a single key/value pair. Returns a command that
@@ -782,6 +793,16 @@ func (m Model) viewConfigPage() string {
 			line = rowIndent + label + " " + val
 		}
 		content.WriteString(line + "\n")
+	}
+
+	// ── idle coverage line (shown when no job is running and embeddings are on) ──
+	if !m.jobRunning && m.configEmbeddingsEnabled {
+		pct := 0
+		if m.configCoverageTotal > 0 {
+			pct = m.configCoverageHave * 100 / m.configCoverageTotal
+		}
+		covLine := fmt.Sprintf("COVERAGE  %d/%d (%d%%)", m.configCoverageHave, m.configCoverageTotal, pct)
+		content.WriteString("\n" + rowIndent + configTestingStyle.Render(covLine) + "\n")
 	}
 
 	// ── progress bar (visible while job is running) ───────────────────────────

@@ -114,6 +114,13 @@ type configProbeResultMsg struct {
 	info string // human-readable summary or error message
 }
 
+// configCoverageLoadedMsg carries the embedding coverage counts for the config
+// view's idle COVERAGE row. Sent when the config view loads settings.
+type configCoverageLoadedMsg struct {
+	have  int
+	total int
+}
+
 // configRegenResultMsg carries the result of a REGENERATE EMBEDDINGS operation.
 type configRegenResultMsg struct {
 	ok   bool
@@ -378,6 +385,11 @@ type Model struct {
 	// a subsequent successful save.
 	configSaveErr error
 
+	// Embedding coverage counts for the idle COVERAGE row in the config view.
+	// Populated by configCoverageLoadedMsg on config view entry.
+	configCoverageHave  int
+	configCoverageTotal int
+
 	// saveFn is the injectable setting-persistence function. In production it
 	// is nil and saveConfigSetting falls back to st.SetSetting. In tests it can
 	// be replaced with a stub that returns a controlled error.
@@ -638,6 +650,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.configEmbeddingsEnabled = msg.embeddingsEnabled
 		m.configOllamaURL = msg.ollamaURL
 		m.configModel = msg.model
+		return m, nil
+
+	case configCoverageLoadedMsg:
+		m.configCoverageHave = msg.have
+		m.configCoverageTotal = msg.total
 		return m, nil
 
 	case configSaveSettingMsg:

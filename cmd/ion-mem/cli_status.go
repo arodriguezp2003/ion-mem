@@ -84,6 +84,14 @@ func runStatus(args []string, out io.Writer) error {
 	dbPath := filepath.Join(cfg.dataDir, "ion-mem.db")
 	dbSize := fileSizeOrZero(dbPath)
 
+	// Embedding coverage: fetch settings and count.
+	embEnabled := st.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
+	embModel := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+	var embHave, embTotal int
+	if embEnabled {
+		embHave, embTotal, _ = st.EmbeddingCoverage(ctx, "", embModel)
+	}
+
 	writeStatusReport(out, statusReport{
 		dataDir:        cfg.dataDir,
 		dbPath:         dbPath,
@@ -95,24 +103,39 @@ func runStatus(args []string, out io.Writer) error {
 		activeSessions: activeSessions,
 		staleSessions:  staleSessions,
 		recentPrompts:  recentPrompts,
+		embeddingReport: embeddingReport{
+			enabled:  embEnabled,
+			model:    embModel,
+			embedded: embHave,
+			total:    embTotal,
+		},
 	})
 	return nil
+}
+
+// embeddingReport carries embedding coverage data for the status report.
+type embeddingReport struct {
+	enabled  bool
+	model    string
+	embedded int
+	total    int
 }
 
 // statusReport collects everything writeStatusReport needs. Keeping it as a
 // struct (rather than passing a long argument list) makes the writer testable
 // in isolation against a hand-built fixture.
 type statusReport struct {
-	dataDir        string
-	dbPath         string
-	dbSize         int64
-	limit          int
-	now            time.Time
-	stats          store.Stats
-	recentObs      []store.Observation
-	activeSessions []store.Session
-	staleSessions  []store.Session
-	recentPrompts  []store.Prompt
+	dataDir         string
+	dbPath          string
+	dbSize          int64
+	limit           int
+	now             time.Time
+	stats           store.Stats
+	recentObs       []store.Observation
+	activeSessions  []store.Session
+	staleSessions   []store.Session
+	recentPrompts   []store.Prompt
+	embeddingReport embeddingReport
 }
 
 func writeStatusReport(out io.Writer, r statusReport) {
@@ -126,6 +149,17 @@ func writeStatusReport(out io.Writer, r statusReport) {
 	fmt.Fprintf(out, "  observations: %d (non-deleted)\n", r.stats.TotalObservations)
 	fmt.Fprintf(out, "  prompts:      %d\n", r.stats.TotalPrompts)
 	fmt.Fprintf(out, "  sessions:     %d total  (%d active)\n", r.stats.TotalSessions, len(r.activeSessions))
+	// Embedding coverage line.
+	if !r.embeddingReport.enabled {
+		fmt.Fprintln(out, "  embeddings: disabled")
+	} else {
+		pct := 0
+		if r.embeddingReport.total > 0 {
+			pct = r.embeddingReport.embedded * 100 / r.embeddingReport.total
+		}
+		fmt.Fprintf(out, "  embeddings: %d/%d embedded (%d%%) — model %s\n",
+			r.embeddingReport.embedded, r.embeddingReport.total, pct, r.embeddingReport.model)
+	}
 	if len(r.stats.ByProject) > 0 {
 		fmt.Fprintln(out, "  by project:")
 		sorted := append([]store.ProjectStats(nil), r.stats.ByProject...)

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 
+	"github.com/ionix/ion-mem/internal/store"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
@@ -36,12 +37,26 @@ func handleStats(s *Server) toolHandler {
 			})
 		}
 
+		// Embedding coverage extras.
+		embEnabled := s.store.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
+		embModel := s.store.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+		var embHave, embTotal int
+		if embEnabled {
+			embHave, embTotal, _ = s.store.EmbeddingCoverage(ctx, "", embModel)
+		}
+
 		raw := Build(det, "stats fetched", map[string]any{
 			"stats": map[string]any{
 				"total_sessions":     stats.TotalSessions,
 				"total_observations": stats.TotalObservations,
 				"total_prompts":      stats.TotalPrompts,
 				"by_project":         byProject,
+				"embeddings": map[string]any{
+					"enabled":  embEnabled,
+					"model":    embModel,
+					"embedded": embHave,
+					"total":    embTotal,
+				},
 			},
 		})
 		return textResult(raw), nil
