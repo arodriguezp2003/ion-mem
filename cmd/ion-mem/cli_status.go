@@ -86,7 +86,7 @@ func runStatus(args []string, out io.Writer) error {
 
 	// Embedding coverage: fetch settings and count.
 	embEnabled := st.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
-	embModel := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+	embModel := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 	var embHave, embTotal int
 	if embEnabled {
 		embHave, embTotal, _ = st.EmbeddingCoverage(ctx, "", embModel)

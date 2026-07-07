@@ -504,7 +504,7 @@ func newModel() Model {
 		configInput:     ci,
 		detailEditInput: ei,
 		configOllamaURL: "http://localhost:11434",
-		configModel:     "nomic-embed-text",
+		configModel:     store.DefaultEmbeddingsModel,
 		view:            viewProjects,
 		version:         "dev",
 	}

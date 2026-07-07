@@ -14,6 +14,12 @@ const (
 	SettingEmbeddingsModel   = "embeddings.model"
 )
 
+// DefaultEmbeddingsModel is the embedding model used when embeddings.model is
+// not set. bge-m3 (1024 dims) is multilingual and handles cross-lingual
+// retrieval (e.g. Spanish query against English content); nomic-embed-text does
+// not, so it must never be the default.
+const DefaultEmbeddingsModel = "bge-m3"
+
 // GetSetting retrieves the value stored for key. Returns (value, true, nil) when
 // found, ("", false, nil) when not found, or ("", false, err) on a database error.
 func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {

@@ -90,7 +90,7 @@ func NewSearcherFromSettings(ctx context.Context, st *store.Store) *Searcher {
 	}
 
 	url := st.SettingOrDefault(ctx, store.SettingOllamaURL, "http://localhost:11434")
-	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 
 	client := embed.DefaultClient(url)
 	embedder := embed.NewOllamaEmbedder(client, model)

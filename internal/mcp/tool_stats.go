@@ -39,7 +39,7 @@ func handleStats(s *Server) toolHandler {
 
 		// Embedding coverage extras.
 		embEnabled := s.store.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
-		embModel := s.store.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+		embModel := s.store.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 		var embHave, embTotal int
 		if embEnabled {
 			embHave, embTotal, _ = s.store.EmbeddingCoverage(ctx, "", embModel)

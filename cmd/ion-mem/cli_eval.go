@@ -24,7 +24,7 @@ type evalConfig struct {
 	k          int    // precision cutoff (default 5)
 	embeddings bool   // when true, use hybrid RRF searcher instead of BM25-only
 	ollamaURL  string // Ollama base URL for embedding (default http://localhost:11434)
-	model      string // embedding model name (default nomic-embed-text)
+	model      string // embedding model name (default bge-m3)
 }
 
 // parseEvalFlags parses the `ion-mem eval` flag set.
@@ -40,7 +40,7 @@ func parseEvalFlags(args []string, homeDir func() (string, error)) (evalConfig, 
 	k := fs.Int("k", 5, "Precision cutoff k (default 5).")
 	embeddings := fs.Bool("embeddings", false, "Use hybrid RRF searcher (BM25 + vector) instead of BM25-only.")
 	ollamaURL := fs.String("ollama-url", "http://localhost:11434", "Ollama base URL for embeddings (used when --embeddings is set).")
-	model := fs.String("model", "nomic-embed-text", "Embedding model name (used when --embeddings is set).")
+	model := fs.String("model", store.DefaultEmbeddingsModel, "Embedding model name (used when --embeddings is set).")
 
 	if err := fs.Parse(args); err != nil {
 		return evalConfig{}, fmt.Errorf("ion-mem eval: %w", err)

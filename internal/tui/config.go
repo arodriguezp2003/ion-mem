@@ -278,7 +278,7 @@ func (m Model) fetchConfigSettings() tea.Cmd {
 		ctx := context.Background()
 		enabled := st.SettingOrDefault(ctx, store.SettingEmbeddingsEnabled, "false") == "true"
 		url := st.SettingOrDefault(ctx, store.SettingOllamaURL, "http://localhost:11434")
-		model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+		model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 		return configSettingsLoadedMsg{embeddingsEnabled: enabled, ollamaURL: url, model: model}
 	}
 	coverageCmd := func() tea.Msg {
@@ -287,7 +287,7 @@ func (m Model) fetchConfigSettings() tea.Cmd {
 		if !enabled {
 			return configCoverageLoadedMsg{}
 		}
-		model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+		model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 		have, total, _ := st.EmbeddingCoverage(ctx, "", model)
 		return configCoverageLoadedMsg{have: have, total: total}
 	}

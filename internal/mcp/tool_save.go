@@ -123,7 +123,7 @@ func tryEmbed(ctx context.Context, st *store.Store, obsID int64, title, content 
 	}
 
 	url := st.SettingOrDefault(ctx, store.SettingOllamaURL, "http://localhost:11434")
-	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 
 	client := embed.DefaultClient(url)
 	embedder := embed.NewOllamaEmbedder(client, model)

@@ -242,7 +242,7 @@ var knownConfigKeys = []string{
 var knownConfigDefaults = map[string]string{
 	"embeddings.enabled":     "false",
 	"embeddings.ollama_url":  "http://localhost:11434",
-	"embeddings.model":       "nomic-embed-text",
+	"embeddings.model":       store.DefaultEmbeddingsModel,
 	"retention.prompt_days":  "90",
 	"retention.deleted_days": "30",
 }

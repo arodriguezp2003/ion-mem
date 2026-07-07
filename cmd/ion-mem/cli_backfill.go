@@ -68,7 +68,7 @@ func runBackfill(args []string, out io.Writer) error {
 	}
 
 	ollamaURL := st.SettingOrDefault(ctx, store.SettingOllamaURL, "http://localhost:11434")
-	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, "nomic-embed-text")
+	model := st.SettingOrDefault(ctx, store.SettingEmbeddingsModel, store.DefaultEmbeddingsModel)
 
 	client := embed.DefaultClient(ollamaURL)
 	embedder := embed.NewOllamaEmbedder(client, model)
