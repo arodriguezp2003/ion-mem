@@ -10,6 +10,9 @@ leaves your machine) and agent-agnostic — the memory is exposed as 19 MCP tool
 any MCP-capable agent can use it. Claude Code gets a plugin with hooks and skills on
 top.
 
+Source is developed in a separate repository; this repository publishes releases
+and the Claude Code plugin.
+
 ---
 
 ## Install
@@ -20,11 +23,11 @@ top.
 brew install arodriguezp2003/tap/ion-mem
 ```
 
-**Go**
+**Or download a prebuilt archive**
 
-```bash
-go install github.com/arodriguezp2003/ion-mem/cmd/ion-mem@latest
-```
+Grab the archive for your OS/arch from the
+[Releases page](https://github.com/arodriguezp2003/ion-mem/releases), extract it,
+and put the `ion-mem` binary on your `PATH`.
 
 Then register the Claude Code plugin:
 
@@ -36,10 +39,10 @@ claude plugin install ion-mem@ion-mem
 **Restart Claude Code** (or run `/reload-plugins`) so the hooks, the MCP server and
 the skills load.
 
-> Installing with `go install` puts the binary in `$GOBIN`/`$GOPATH/bin`. Claude Code
-> launched from Spotlight or the Dock inherits a minimal PATH that usually does not
-> include it. Either install via Homebrew, or run [`install.sh`](install.sh), which
-> symlinks the binary into `/opt/homebrew/bin` or `/usr/local/bin`.
+> Claude Code launched from Spotlight or the Dock inherits a minimal PATH that
+> usually does not include a Homebrew or manually-extracted install location. Run
+> [`install.sh`](install.sh), which symlinks the binary into `/opt/homebrew/bin` or
+> `/usr/local/bin`.
 
 Verify:
 
@@ -363,52 +366,6 @@ Retention is yours to set: `ion-mem prune` (dry-run by default) removes prompts 
 than `retention.prompt_days` and hard-deletes observations soft-deleted longer ago
 than `retention.deleted_days`, while refusing to touch permanent `bugfix`/`discovery`
 rows.
-
----
-
-## Development
-
-Requires Go 1.25+.
-
-```bash
-make build   # go build ./...
-make test    # go test ./...
-make lint    # go vet ./...
-make fmt     # gofmt check — exits non-zero on drift
-make help    # list targets
-```
-
-CI runs build, `go test -race ./...`, `go vet` and a gofmt check on every push and
-pull request.
-
-The version string is injected at build time:
-
-```bash
-go build -ldflags "-X main.version=$(git describe --tags --always --dirty)" ./cmd/ion-mem
-```
-
-Without ldflags the binary falls back to the module version in build info, then to
-`"dev"`.
-
-Database migrations are numbered SQL files applied automatically on store open. Add
-new ones as the next number; never edit an existing migration.
-
-### Release process
-
-1. Land everything on `main` and make sure CI is green.
-2. Tag and push:
-
-   ```bash
-   git tag -a v0.5.0 -m "v0.5.0"
-   git push origin v0.5.0
-   ```
-
-3. The `release` workflow runs GoReleaser, which builds darwin/linux binaries for
-   amd64 and arm64, publishes the GitHub Release with checksums and a grouped
-   changelog, and commits the updated formula to
-   [`arodriguezp2003/homebrew-tap`](https://github.com/arodriguezp2003/homebrew-tap).
-
-See [RELEASE-CHECKLIST.md](RELEASE-CHECKLIST.md) for the one-time setup.
 
 ---
 
