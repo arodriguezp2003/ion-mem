@@ -1,0 +1,7 @@
+{
+  "name": "ion-mem",
+  "description": "Persistent memory for AI coding agents — session tracking, compaction recovery, and Memory Protocol over MCP.",
+  "version": "0.5.0",
+  "author": { "name": "Alejandro Rodriguez" },
+  "license": "MIT"
+}

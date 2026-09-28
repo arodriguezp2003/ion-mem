@@ -1,0 +1,182 @@
+# Synthetic golden query set for ion-mem search evaluation.
+# All queries exercise a specific search property.
+# expect_fail: true marks queries requiring semantic understanding (embedding targets).
+
+# --- Exact title match queries ---
+
+- id: "Q01"
+  query: "auth-service architecture"
+  expected:
+    - "auth-service architecture decision"
+  expect_fail: false
+  note: "Kebab-case title term: exact title hit"
+
+- id: "Q02"
+  query: "rate-limiter design"
+  expected:
+    - "rate-limiter design notes"
+  expect_fail: false
+  note: "Kebab-case title term with topic_key signal"
+
+- id: "Q03"
+  query: "BM25 scoring"
+  expected:
+    - "BM25 scoring explanation"
+  expect_fail: false
+  note: "Exact title match, also has topic_key"
+
+- id: "Q04"
+  query: "FTS5 tokenizer"
+  expected:
+    - "FTS5 tokenizer behavior"
+  expect_fail: false
+  note: "Exact title match"
+
+# --- Multi-term AND queries ---
+
+- id: "Q05"
+  query: "database migration"
+  expected:
+    - "database migration strategy"
+    - "database connection pooling"
+  expect_fail: false
+  note: "Multi-term, two plausible docs share 'database'"
+
+- id: "Q06"
+  query: "search ranking decay"
+  expected:
+    - "search ranking weights"
+    - "search recency decay"
+  expect_fail: false
+  note: "Multi-term spanning two related docs"
+
+- id: "Q07"
+  query: "retry exponential backoff"
+  expected:
+    - "retry policy with exponential backoff"
+  expect_fail: false
+  note: "Multi-term AND with rare compound"
+
+# --- Multi-term with one bad term (fuzzy / OR fallback path) ---
+
+- id: "Q08"
+  query: "circuit breaker kubernetes"
+  expected:
+    - "circuit breaker configuration"
+  expect_fail: false
+  note: "One bad term forces OR fallback; circuit breaker doc surfaces"
+
+- id: "Q09"
+  query: "rollback procedure helm"
+  expected:
+    - "rollback procedure"
+  expect_fail: false
+  note: "One nonsense term; rollback doc found via OR fallback"
+
+# --- Kebab-case identifier queries ---
+
+- id: "Q10"
+  query: "auth-service"
+  expected:
+    - "auth-service architecture decision"
+  expect_fail: false
+  note: "Kebab fragment tokenized as 'auth' 'service'"
+
+- id: "Q11"
+  query: "rate-limiter"
+  expected:
+    - "rate-limiter design notes"
+    - "service mesh configuration"
+  expect_fail: false
+  note: "Kebab term appears in both title and content"
+
+# --- topic_key hit queries ---
+
+- id: "Q12"
+  query: "local-store-mvp"
+  expected:
+    - "local store mvp design"
+  expect_fail: false
+  note: "topic_key 'sdd/local-store-mvp/design' matches via FTS tokenization"
+
+- id: "Q13"
+  query: "api-versioning"
+  expected:
+    - "API versioning strategy"
+  expect_fail: false
+  note: "topic_key 'architecture/api-versioning' tokenizes to 'api' 'versioning'"
+
+# --- Recency tiebreak queries (fresh doc expected first) ---
+
+- id: "Q14"
+  query: "error handling"
+  expected:
+    - "error handling convention"
+  expect_fail: false
+  note: "Two identical docs; fresh one (age_days=2) must outrank stale one (age_days=95)"
+
+- id: "Q15"
+  query: "commit message style"
+  expected:
+    - "commit message style guide"
+  expect_fail: false
+  note: "Two identical docs; fresh one (age_days=4) must outrank stale one (age_days=120)"
+
+# --- Long-content snippet cases ---
+
+- id: "Q16"
+  query: "rollback deployment"
+  expected:
+    - "rollback procedure"
+    - "deployment checklist"
+  expect_fail: false
+  note: "Term 'rollback' is deep inside deployment checklist content"
+
+# --- Type-filter-free ranking ---
+
+- id: "Q17"
+  query: "session lifecycle"
+  expected:
+    - "session lifecycle management"
+  expect_fail: false
+  note: "topic_key 'architecture/session-lifecycle' and title match"
+
+- id: "Q18"
+  query: "soft delete"
+  expected:
+    - "soft delete behavior"
+  expect_fail: false
+  note: "Exact phrase in title"
+
+# --- Semantic-gap queries (expect_fail: true) ---
+# These are BM25 lexical gaps — the query and doc share no common tokens.
+# Marked expect_fail so current thresholds do not count them.
+# When embeddings land, these must flip to passing.
+
+- id: "Q19"
+  query: "how do we authenticate users"
+  expected:
+    - "JWT login flow with refresh tokens"
+  expect_fail: true
+  note: "BM25 lexical gap — embeddings target: authenticate/users vs JWT/login/refresh"
+
+- id: "Q20"
+  query: "storing data without losing it on crash"
+  expected:
+    - "WAL mode performance characteristics"
+  expect_fail: true
+  note: "BM25 lexical gap — embeddings target: crash safety vs WAL/synchronous/journal"
+
+- id: "Q21"
+  query: "speeding up slow lookups in big tables"
+  expected:
+    - "query optimization notes"
+  expect_fail: true
+  note: "BM25 lexical gap — embeddings target: speeding/slow/lookups vs indexes/profiling/scans"
+
+- id: "Q22"
+  query: "making sure two threads do not conflict"
+  expected:
+    - "concurrency safety approach"
+  expect_fail: true
+  note: "BM25 lexical gap — embeddings target: threads/conflict vs goroutines/WAL/pool"

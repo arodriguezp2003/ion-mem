@@ -1,0 +1,100 @@
+version: 2
+
+project_name: ion-mem
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: ion-mem
+    main: ./cmd/ion-mem
+    binary: ion-mem
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: default
+    ids:
+      - ion-mem
+    formats:
+      - tar.gz
+    name_template: "ion-mem_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Performance
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Refactors
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: Documentation
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 4
+    - title: Tests
+      regexp: '^.*?test(\([[:word:]]+\))??!?:.+$'
+      order: 5
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - '^chore'
+      - '^ci'
+      - '^style'
+      - "merge conflict"
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+
+brews:
+  - name: ion-mem
+    ids:
+      - default
+    repository:
+      owner: arodriguezp2003
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/arodriguezp2003/ion-mem"
+    description: "Persistent memory for AI coding agents — local-first, project-scoped, agent-agnostic via MCP."
+    license: "MIT"
+    commit_author:
+      name: Alejandro Rodriguez
+      email: arodriguezp2003@users.noreply.github.com
+    commit_msg_template: "chore(formula): update ion-mem to {{ .Tag }}"
+    install: |
+      bin.install "ion-mem"
+    test: |
+      system "#{bin}/ion-mem", "version"
+
+release:
+  github:
+    owner: arodriguezp2003
+    name: ion-mem
+  draft: false
+  prerelease: auto
